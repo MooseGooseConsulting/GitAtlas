@@ -1,30 +1,54 @@
 # Git Atlas — Thoughts & Interpretation
 
+> Historical product framing, updated August 2026 to reflect the current semantic architecture. See `docs/architecture.md` and issues #9-#19 for implementation authority.
+
 ## What You're Really Asking For
 
-You have a **memory problem with your own tools**. Not a bad memory — a *retrieval* problem. You've built, forked, and customized dozens of projects, but when you need something, you can't find it. You start from zero instead of building on what you already have.
+You have a **retrieval problem with your own tools**. You've built, forked, imported, and customized many projects, but when you need something you cannot reliably answer whether the capability already exists, where the current authority lives, or which older repositories are predecessors rather than active systems.
 
-The core pain: **"Do I already have something for this?"** — and you can never answer it quickly enough.
+The core pain remains:
 
-## How I Interpret This
+> **Do I already have something for this?**
 
-1. **You need a map, not a list.** Terse lists of repo names don't trigger recall. Spatial, visual, tagged representations do. You need to *see* your universe at a glance and drill in.
+GitAtlas should externalize enough understanding of the corpus that this no longer requires starting from zero.
 
-2. **Tags and summaries are the backbone.** Raw repo metadata (name, stars, language) isn't enough. You need semantic tags like "cli-tool", "automation", "api-wrapper", "template", "experiment" — things that describe *purpose*, not just *technology*.
+## Product principles
 
-3. **Outdated READMEs are a real problem.** When you do find a repo, the README lies to you. It says what the project *aspired* to be, not what it *is*. That's step 2.
+1. **You need a map, not a list.** Repo names and raw GitHub metadata are not enough. GitAtlas should let you see the estate at a useful semantic level and drill into repositories, systems, relationships, and evidence.
 
-4. **Organizations matter.** Your projects live across personal repos and orgs. You need to see them all in one place, but also understand the organizational context.
+2. **Semantic understanding is the backbone.** Tags and summaries were useful first-generation signals, but they are not sufficient. The system needs repository-level and corpus-level LLM reasoning that can understand purpose, authority, lineage, maturity, boundaries, duplication, and reuse.
 
-5. **Visual is non-negotiable.** You're a visual person. Flowcharts, hover interactions, spatial layout — these aren't nice-to-haves, they're the whole point. Lists are reference material; visuals are understanding material.
+3. **Source reality beats aspirational documentation.** READMEs can be stale or describe intent rather than implementation. A capable coding/research harness should inspect whatever evidence is necessary—source, docs, Git history, sibling repositories, deployment references, and owner notes.
 
-## The Deeper Problem You're Solving
+4. **Organizations and repository boundaries matter, but repositories are not necessarily the product unit.** A meaningful system may span several repositories, while a single repository may contain imported/vendor/reference material that should not be mistaken for current authority.
 
-This isn't just about GitHub repos. This is about **agentic memory** — having a system that knows what you have so you don't have to remember. This project is a first step: externalizing your project knowledge into something you can interact with.
+5. **Visual understanding is core to the product.** GitAtlas should preserve its strong visual exploration work, but the visuals should eventually render the semantic estate model rather than treating technical similarity as the same thing as product topology.
 
-## Longer-Term Vision
+## The deeper problem
 
-1. **Phase 1 (DONE):** Static but interactive visualization based on GitHub API data + AI summaries
-2. **Phase 2 (DONE):** Deep code analysis — reads actual source files, generates honest summaries, rewrites READMEs
-3. **Phase 3 (IN PROGRESS):** Living system that updates when repos change, surfaces "you already have X" when you describe a need
-4. **Phase 4 (FUTURE):** The "agentic memory" — when you think "I need a tool for Y", this system says "you already built something similar, here it is"
+This is about **semantic memory for the software estate**.
+
+GitAtlas should remember what the corpus appears to mean, while making that understanding inspectable and refreshable as repositories change. It should help a person or coding agent avoid rebuilding existing work and avoid confusing historical, imported, vendor-derived, or overlapping repositories with the current source of truth.
+
+## Architectural correction
+
+The semantic intelligence should **not** be implemented as a new GitAtlas agent framework.
+
+Use existing capable coding/research harnesses to reason over repositories and the corpus. Keep GitAtlas thin:
+
+- prepare or hand off context;
+- store/version the returned semantic artifacts;
+- retain owner notes;
+- track which repo revisions those artifacts describe;
+- visualize/query the results.
+
+Most semantic behaviors should begin life as versioned prompts/skills, not TypeScript agent classes or deterministic classification pipelines.
+
+## Current phases
+
+1. **Existing foundation:** interactive repository visualization, GitHub ingestion, metadata, technical similarity, source/dependency inspection, search, and detail views.
+2. **Current milestone:** establish a thin harness handoff, build repository-understanding and estate-understanding prompts/skills, persist their outputs, and run the entire real corpus early.
+3. **Corpus-driven product work:** use the real semantic output to decide the useful systems/lineage/authority UI, review workflow, owner-note UX, and refresh behavior.
+4. **Later productization:** if proven useful, expose repeatable corpus-research workflows such as "Do I already have this?" directly inside GitAtlas; until then they can remain prompts/skills run through an existing harness.
+
+The real corpus should drive later architecture. Do not pre-build a generalized ontology, semantic state machine, or agent orchestration platform around hypothetical needs.
