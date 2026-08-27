@@ -1,1 +1,14 @@
-name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: oven-sh/setup-bun@v1\n      - name: Install dependencies\n        run: bun install\n      - name: Lint\n        run: bun run lint\n      - name: Test\n        run: bun run test:vitest\n
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || vars.CI_FORCE_HOSTED == 'true') && 'ubuntu-latest' || 'moosegoose-general' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - name: Install dependencies
+        run: bun install
+      - name: Lint
+        run: bun run lint
+      - name: Test
+        run: bun run test:vitest
