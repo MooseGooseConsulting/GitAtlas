@@ -1,20 +1,18 @@
 // src/lib/llm.ts
 //
-// OpenAI-compatible LLM client.
+// LEGACY COMPATIBILITY: direct OpenAI-compatible LLM client.
 //
-// Why this file exists:
-//   The original project used `z-ai-web-dev-sdk`, which hides the endpoint and
-//   credentials and locks us to one provider. The user wants "live" mode
-//   powered by an OpenAI-compatible endpoint of their choice (OpenAI, a local
-//   Ollama / vLLM / LM Studio, OpenRouter, Groq, etc.). All of those speak the
-//   same `/v1/chat/completions` shape, so a thin native-fetch wrapper is
-//   enough and avoids adding the `openai` npm dep (keeps bundle/install lean
-//   and works the same in Bun and Node).
+// This file powers the pre-#10 in-app AI enrichment routes. It is retained
+// while issue #10 establishes the new thin handoff to an existing capable
+// coding/research harness.
 //
-// All five existing AI routes (analyze, deep-analyze, smart-search,
-// rewrite-readme, recommendations) call `chat()` or `chatJSON()` from here.
-// If we ever want streaming, switch providers, add retries, etc., we change
-// only this file.
+// IMPORTANT: do not evolve this wrapper into a GitAtlas agent runtime, model
+// router, tool loop, retry/orchestration framework, or semantic backend.
+// New repository/corpus semantic work should use the harness boundary and
+// versioned prompts/skills described in docs/architecture.md and issues #9-#19.
+//
+// Existing routes may continue to depend on chat()/chatJSON() until their
+// replacement path is proven and compatibility requirements are understood.
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -86,6 +84,10 @@ export async function chat(opts: ChatOptions): Promise<string> {
  * JSON in markdown fences or include a stray prose preamble. We strip the
  * common patterns before `JSON.parse` and return `null` on failure so callers
  * can fall back gracefully instead of crashing the whole request.
+ *
+ * NOTE: this behavior is legacy. New semantic workflows introduced by #10+
+ * should use the existing harness's supported structured-output mechanism,
+ * not extend this parser.
  */
 export async function chatJSON<T = unknown>(opts: ChatOptions): Promise<T | null> {
   const raw = await chat({ ...opts, jsonMode: true });

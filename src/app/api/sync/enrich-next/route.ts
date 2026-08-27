@@ -4,16 +4,21 @@ import { db } from '@/lib/db';
 /**
  * POST /api/sync/enrich-next
  *
- * Why this exists:
- *   The 5 AI routes (analyze, deep-analyze, smart-search, rewrite-readme,
- *   recommendations) ARE the "subagents". This endpoint is the *orchestrator*:
- *   it picks the single most-stale repo and runs the next required enrichment
- *   step for it. The sync-worker (in /mini-services) calls this on a tight
- *   interval so the dashboard stays continuously up-to-date.
+ * LEGACY COMPATIBILITY: this endpoint orchestrates the pre-#10 in-app AI
+ * enrichment path. It chooses stale repositories and invokes the old shallow
+ * and deep analysis routes.
  *
- * Strategy (priority order):
+ * Target direction (issues #9-#19): do not extend this endpoint into a larger
+ * semantic orchestrator or agent framework. New repository/corpus semantic
+ * reasoning should be delegated to an existing capable coding/research
+ * harness via the thin handoff in #10 and prompts/skills in #11/#13.
+ *
+ * Useful change-detection/staleness behavior may survive into #18, but semantic
+ * meaning should not be decided by deterministic sequencing here.
+ *
+ * Current legacy strategy:
  *   1. If any project has `analyzedAt = null`, run shallow analyze on its owner's
- *      whole pending batch via /api/github/analyze (it processes in batches).
+ *      pending batch via /api/github/analyze.
  *   2. Otherwise if any project has `deepAnalyzedAt = null`, pick one and run
  *      deep-analyze for it.
  *   3. Otherwise return `{ done: true }`.
