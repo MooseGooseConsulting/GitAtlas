@@ -1,20 +1,25 @@
 /**
  * GitAtlas sync-worker
  *
- * Why this exists:
- *   The Next.js app has all the smarts (5 AI subagent routes). This worker is
- *   the *boring* outer loop that keeps invoking them so the dashboard stays
- *   live. Run it as a separate Bun process so a long enrichment never blocks
- *   the web request cycle.
+ * LEGACY COMPATIBILITY: this worker belongs to the pre-#10 enrichment
+ * architecture. It currently keeps invoking the old in-app analysis routes so
+ * the dashboard stays live.
  *
- * Two independent loops:
- *   - refresh:  POST /api/sync/refresh        every SYNC_REFRESH_INTERVAL  seconds
+ * Target direction (issues #9-#19): retain only the boring repository-change
+ * detection / refresh responsibilities that remain useful. Do NOT grow this
+ * worker into an agent runtime, tool loop, semantic orchestrator, or subagent
+ * framework. New repository/corpus reasoning should be delegated to an
+ * existing capable coding/research harness through the thin handoff defined
+ * by #10 and the prompts/skills in #11/#13.
+ *
+ * Current legacy loops:
+ *   - refresh:  POST /api/sync/refresh        every SYNC_REFRESH_INTERVAL seconds
  *               (cheap GitHub probe, marks changed repos stale)
- *   - enrich:   POST /api/sync/enrich-next    every SYNC_ENRICH_INTERVAL   seconds
- *               (picks the next stale repo and runs one analysis step)
+ *   - enrich:   POST /api/sync/enrich-next    every SYNC_ENRICH_INTERVAL seconds
+ *               (drives the old shallow/deep in-app enrichment path)
  *
- * Both loops are tolerant: any failure is logged and the loop continues. We
- * never want a transient GitHub 502 or LLM hiccup to kill the worker.
+ * Both loops are tolerant: any failure is logged and the loop continues.
+ * We never want a transient GitHub 502 or LLM hiccup to kill the worker.
  */
 
 const BASE_URL = process.env.SYNC_BASE_URL || 'http://localhost:3000';
