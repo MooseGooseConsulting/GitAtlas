@@ -1,5 +1,7 @@
 # Git Atlas UI/UX product review
 
+Reviewed 2026-09-30 against the code at `745557d` (`main` when this review was written). Claims below are a snapshot of that commit. If the cockpit has moved, treat this document as stale until someone re-checks it.
+
 Reviewed from the shipped frontend only (`src/app/page.tsx`, `src/components/*`, `src/app/globals.css`, `docs/thoughts.md`). No feature code was changed. There are no product screenshots in the repo; the inventory below is from the components that actually mount.
 
 Comparison baseline (Patrick): Graphite’s merge inbox — attention sections such as Returned to you / Approved / Waiting for reviewers, dense rows, and a hover “Reviewed by” that names people and bots and says whether they commented or requested changes.
@@ -98,6 +100,8 @@ Icon-only. Selected state is an emerald (or amber/rose) tint. Tooltips still say
 ## 5. Recommendations
 
 Ranked for a UI pass. None of these require inventing a merge inbox unless that is a new product decision (see section 6).
+
+Status for every item below: **proposed**. None are filed as issues, none have an owner, and none are done. This section is a review, not a tracked backlog. When an item lands, record that in the live product docs and mark it here, or the list will outlive the code.
 
 ### P0 — make the current product tell the truth
 
