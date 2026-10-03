@@ -111,7 +111,7 @@ describe('AdvancedFilters interactions', () => {
 
     filters = { ...filters, selectedLanguages: ['TypeScript'] };
     rerender(<AdvancedFilters projects={projects} filters={filters} onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Reset', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: /^Reset$/ }));
 
     expect(filters).toEqual(DEFAULT_FILTERS);
     expect(useAtlasStore.getState().searchQuery).toBe('my independent query');
