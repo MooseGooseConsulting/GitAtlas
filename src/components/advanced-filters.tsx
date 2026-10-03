@@ -1,6 +1,5 @@
 'use client';
 
-import { useAtlasStore } from '@/lib/store';
 import { Project, CATEGORY_COLORS, LANGUAGE_COLORS } from '@/lib/types';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
@@ -8,12 +7,14 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
 import { Filter, X, Check } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 // Exported types for use by cockpit-dashboard
 export interface AdvancedFilterState {
   selectedLanguages: string[];
   selectedCategories: string[];
+  selectedFrameworks: string[];
+  activityRangeDays: [number, number];
   minStars: number;
   onlyAnalyzed: boolean;
   onlyNotArchived: boolean;
@@ -22,15 +23,27 @@ export interface AdvancedFilterState {
 export const DEFAULT_FILTERS: AdvancedFilterState = {
   selectedLanguages: [],
   selectedCategories: [],
+  selectedFrameworks: [],
+  activityRangeDays: [0, 365],
   minStars: 0,
   onlyAnalyzed: false,
   onlyNotArchived: false,
 };
 
-export function applyAdvancedFilters(projects: Project[], filters: AdvancedFilterState): Project[] {
+export function applyAdvancedFilters(projects: Project[], filters: AdvancedFilterState, now = Date.now()): Project[] {
   return projects.filter(p => {
-    if (filters.selectedLanguages.length > 0 && p.language && !filters.selectedLanguages.includes(p.language)) return false;
-    if (filters.selectedCategories.length > 0 && p.category && !filters.selectedCategories.includes(p.category)) return false;
+    if (filters.selectedLanguages.length > 0 && (!p.language || !filters.selectedLanguages.includes(p.language))) return false;
+    if (filters.selectedCategories.length > 0 && (!p.category || !filters.selectedCategories.includes(p.category))) return false;
+    if (filters.selectedFrameworks.length > 0 &&
+      !filters.selectedFrameworks.some(framework => Boolean(p.codeSignature?.frameworks.includes(framework)))) return false;
+    const [minAge, maxAge] = filters.activityRangeDays;
+    if (minAge > 0 || maxAge < 365) {
+      if (!p.pushedAt) return false;
+      const pushedAt = new Date(p.pushedAt).getTime();
+      if (!Number.isFinite(pushedAt)) return false;
+      const ageDays = Math.max(0, (now - pushedAt) / (24 * 60 * 60 * 1000));
+      if (ageDays < minAge || ageDays > maxAge) return false;
+    }
     if (filters.minStars > 0 && p.stargazersCount < filters.minStars) return false;
     if (filters.onlyAnalyzed && !p.deepAnalyzedAt) return false;
     if (filters.onlyNotArchived && p.isArchived) return false;
@@ -38,15 +51,33 @@ export function applyAdvancedFilters(projects: Project[], filters: AdvancedFilte
   });
 }
 
-export function AdvancedFilters() {
-  const { projects, activeTags, setActiveTags, searchQuery, setSearchQuery } = useAtlasStore();
+export function countAdvancedFilters(filters: AdvancedFilterState): number {
+  return Number(filters.selectedLanguages.length > 0) +
+    Number(filters.selectedCategories.length > 0) +
+    Number(filters.selectedFrameworks.length > 0) +
+    Number(filters.activityRangeDays[0] > 0 || filters.activityRangeDays[1] < 365) +
+    Number(filters.minStars > 0) +
+    Number(filters.onlyAnalyzed) +
+    Number(filters.onlyNotArchived);
+}
 
-  const [selectedLanguages, setSelectedLanguages] = useState<string[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [activityRange, setActivityRange] = useState<[number, number]>([0, 365]);
-  const [minStars, setMinStars] = useState(0);
-  const [onlyAnalyzed, setOnlyAnalyzed] = useState(false);
-  const [onlyNotArchived, setOnlyNotArchived] = useState(false);
+export function removeAdvancedFilter(filters: AdvancedFilterState, key: 'selectedLanguages' | 'selectedCategories' | 'selectedFrameworks', value: string): AdvancedFilterState {
+  return { ...filters, [key]: filters[key].filter(item => item !== value) };
+}
+
+export function clearActivityRange(filters: AdvancedFilterState): AdvancedFilterState {
+  return { ...filters, activityRangeDays: DEFAULT_FILTERS.activityRangeDays };
+}
+
+interface AdvancedFiltersProps {
+  projects: Project[];
+  filters: AdvancedFilterState;
+  onChange: (filters: AdvancedFilterState) => void;
+}
+
+export function AdvancedFilters({ projects, filters, onChange }: AdvancedFiltersProps) {
+  const { selectedLanguages, selectedCategories, selectedFrameworks, activityRangeDays, minStars, onlyAnalyzed, onlyNotArchived } = filters;
+  const update = (updates: Partial<AdvancedFilterState>) => onChange({ ...filters, ...updates });
 
   // Compute available languages and categories
   const languages = useMemo(() => {
@@ -71,55 +102,18 @@ export function AdvancedFilters() {
     return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
   }, [projects]);
 
-  const activeFilterCount = useMemo(() => {
-    let count = 0;
-    if (selectedLanguages.length > 0) count++;
-    if (selectedCategories.length > 0) count++;
-    if (minStars > 0) count++;
-    if (onlyAnalyzed) count++;
-    if (onlyNotArchived) count++;
-    return count + activeTags.length;
-  }, [selectedLanguages, selectedCategories, minStars, onlyAnalyzed, onlyNotArchived, activeTags]);
+  const activeFilterCount = countAdvancedFilters(filters);
 
   const toggleLanguage = (lang: string) => {
-    setSelectedLanguages(prev =>
-      prev.includes(lang) ? prev.filter(l => l !== lang) : [...prev, lang]
-    );
+    update({ selectedLanguages: selectedLanguages.includes(lang) ? selectedLanguages.filter(l => l !== lang) : [...selectedLanguages, lang] });
   };
 
   const toggleCategory = (cat: string) => {
-    setSelectedCategories(prev =>
-      prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
-    );
-  };
-
-  const applyFilters = () => {
-    // Build a combined search query from selected filters
-    const parts: string[] = [];
-    if (selectedLanguages.length > 0) parts.push(selectedLanguages.join(' '));
-    if (selectedCategories.length > 0) parts.push(selectedCategories.join(' '));
-    // Tags are handled via the existing activeTags state
-    if (selectedCategories.length > 0) {
-      setActiveTags(selectedCategories);
-    }
-    if (selectedLanguages.length > 0 || minStars > 0) {
-      // Add language terms to search
-      const existing = searchQuery || '';
-      const langTerms = selectedLanguages.join(' ');
-      if (!existing.includes(langTerms)) {
-        setSearchQuery([existing, langTerms].filter(Boolean).join(' '));
-      }
-    }
+    update({ selectedCategories: selectedCategories.includes(cat) ? selectedCategories.filter(c => c !== cat) : [...selectedCategories, cat] });
   };
 
   const resetFilters = () => {
-    setSelectedLanguages([]);
-    setSelectedCategories([]);
-    setMinStars(0);
-    setOnlyAnalyzed(false);
-    setOnlyNotArchived(false);
-    setActiveTags([]);
-    setSearchQuery('');
+    onChange(DEFAULT_FILTERS);
   };
 
   return (
@@ -133,7 +127,7 @@ export function AdvancedFilters() {
               ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
               : 'border-border/20 text-muted-foreground hover:text-foreground'
           }`}
-          title="Advanced Filters — Filter by language, category, frameworks, and more"
+          title="Advanced Filters - Filter by language, category, frameworks, and more"
         >
           <Filter className="w-3 h-3" />
           Filters
@@ -223,14 +217,12 @@ export function AdvancedFilters() {
                         key={fw}
                         onClick={() => {
                           // Add framework to search query
-                          if (!searchQuery.includes(fw.toLowerCase())) {
-                            setSearchQuery([searchQuery, fw.toLowerCase()].filter(Boolean).join(' '));
-                          }
+                          update({ selectedFrameworks: selectedFrameworks.includes(fw) ? selectedFrameworks.filter(item => item !== fw) : [...selectedFrameworks, fw] });
                         }}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-card/30 border border-border/15 text-foreground/50 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/20 transition-all"
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] border transition-all ${selectedFrameworks.includes(fw) ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-card/30 border-border/15 text-foreground/50 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/20'}`}
                       >
                         {fw}
-                        <span className="text-muted-foreground/30">×{count}</span>
+                        <span className="text-muted-foreground/30">x{count}</span>
                       </button>
                     ))}
                   </div>
@@ -238,6 +230,22 @@ export function AdvancedFilters() {
                 <div className="h-px bg-gradient-to-r from-transparent via-border/20 to-transparent" />
               </>
             )}
+
+            {/* Activity age range */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider">Days Since Push</h4>
+                <span className="text-[10px] text-emerald-400 font-mono">{activityRangeDays[0]}-{activityRangeDays[1]} days</span>
+              </div>
+              <Slider
+                value={activityRangeDays}
+                onValueChange={([min, max]) => update({ activityRangeDays: [min, max] })}
+                min={0}
+                max={365}
+                step={1}
+                className="w-full"
+              />
+            </div>
 
             {/* Stars filter */}
             <div>
@@ -247,7 +255,7 @@ export function AdvancedFilters() {
               </div>
               <Slider
                 value={[minStars]}
-                onValueChange={([v]) => setMinStars(v)}
+                onValueChange={([v]) => update({ minStars: v })}
                 min={0}
                 max={50}
                 step={1}
@@ -260,7 +268,7 @@ export function AdvancedFilters() {
             {/* Toggles */}
             <div className="space-y-2">
               <button
-                onClick={() => setOnlyAnalyzed(!onlyAnalyzed)}
+                onClick={() => update({ onlyAnalyzed: !onlyAnalyzed })}
                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-[10px] transition-all ${
                   onlyAnalyzed ? 'bg-emerald-500/10 text-emerald-400' : 'text-foreground/60 hover:bg-card/40'
                 }`}
@@ -272,7 +280,7 @@ export function AdvancedFilters() {
               </button>
 
               <button
-                onClick={() => setOnlyNotArchived(!onlyNotArchived)}
+                onClick={() => update({ onlyNotArchived: !onlyNotArchived })}
                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-[10px] transition-all ${
                   onlyNotArchived ? 'bg-emerald-500/10 text-emerald-400' : 'text-foreground/60 hover:bg-card/40'
                 }`}
@@ -296,15 +304,10 @@ export function AdvancedFilters() {
           >
             Reset
           </Button>
-          <Button
-            size="sm"
-            onClick={applyFilters}
-            className="flex-1 h-7 text-xs bg-emerald-600/80 hover:bg-emerald-600 text-white"
-          >
-            Apply ({activeFilterCount} filters)
-          </Button>
+          <span className="flex-1 text-center text-[10px] text-muted-foreground/50">Filters apply as you select them</span>
         </div>
       </PopoverContent>
     </Popover>
   );
 }
+
