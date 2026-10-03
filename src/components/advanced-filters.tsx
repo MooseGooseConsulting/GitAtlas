@@ -127,7 +127,7 @@ export function AdvancedFilters({ projects, filters, onChange }: AdvancedFilters
               ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
               : 'border-border/20 text-muted-foreground hover:text-foreground'
           }`}
-          title="Advanced Filters - Filter by language, category, frameworks, and more"
+          title="Advanced Filters — Filter by language, category, frameworks, and more"
         >
           <Filter className="w-3 h-3" />
           Filters
@@ -222,7 +222,7 @@ export function AdvancedFilters({ projects, filters, onChange }: AdvancedFilters
                         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] border transition-all ${selectedFrameworks.includes(fw) ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-card/30 border-border/15 text-foreground/50 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/20'}`}
                       >
                         {fw}
-                        <span className="text-muted-foreground/30">x{count}</span>
+                        <span className="text-muted-foreground/30">×{count}</span>
                       </button>
                     ))}
                   </div>
