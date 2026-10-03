@@ -26,7 +26,7 @@ import { SettingsDialog } from '@/components/settings-dialog';
 // reads its open state from the Zustand store, so we just need to mount it.
 import { GraphTweaksPanel } from '@/components/graph-tweaks-panel';
 import { ConceptGroups, CONCEPT_GROUPS, getProjectsForGroup } from '@/components/concept-groups';
-import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters } from '@/components/advanced-filters';
+import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters, clearActivityRange, removeAdvancedFilter } from '@/components/advanced-filters';
 import { ConceptDrilldown } from '@/components/concept-drilldown';
 import { Badge } from '@/components/ui/badge';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -90,6 +90,7 @@ export function CockpitDashboard() {
     // Why: cockpit triggers the panel via setShowGraphTweaksPanel; we don't
     // need to read the boolean here because GraphTweaksPanel subscribes.
     setShowGraphTweaksPanel,
+    activeConceptGroups, setActiveConceptGroups,
   } = useAtlasStore();
 
   const [smartSearchOpen, setSmartSearchOpen] = useState(false);
@@ -107,7 +108,6 @@ export function CockpitDashboard() {
   const [aiRecommendationsOpen, setAiRecommendationsOpen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<'activity' | 'commits'>('activity');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeConceptGroups, setActiveConceptGroups] = useState<string[]>([]);
   const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterState>(DEFAULT_FILTERS);
   const [drilldownOpen, setDrilldownOpen] = useState(false);
   const [drilldownProjects, setDrilldownProjects] = useState<Project[]>([]);
@@ -437,14 +437,6 @@ export function CockpitDashboard() {
     }
   }, [isLoadingOrgRepos, hasOrgRepos, username, setProjects]);
 
-  // Concept group toggle handler
-  const handleToggleConceptGroup = useCallback((groupKey: string) => {
-    setActiveConceptGroups(prev => {
-      const next = prev.includes(groupKey) ? prev.filter(k => k !== groupKey) : [...prev, groupKey];
-      return next;
-    });
-  }, []);
-
   // Drill down handler
   const handleDrillDown = useCallback((groupKey: string) => {
     const groupProjects = getProjectsForGroup(projects, groupKey);
@@ -455,17 +447,6 @@ export function CockpitDashboard() {
     setDrilldownIcon(group?.icon || '🔍');
     setDrilldownOpen(true);
   }, [projects]);
-
-  // Advanced filter count
-  const advancedFilterCount = useMemo(() => {
-    let count = 0;
-    if (advancedFilters.selectedLanguages.length > 0) count++;
-    if (advancedFilters.selectedCategories.length > 0) count++;
-    if (advancedFilters.minStars > 0) count++;
-    if (advancedFilters.onlyAnalyzed) count++;
-    if (advancedFilters.onlyNotArchived) count++;
-    return count;
-  }, [advancedFilters]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden page-load-animation">
@@ -573,7 +554,40 @@ export function CockpitDashboard() {
           <div className="h-4 w-px bg-border/10" />
 
           {/* Advanced Filters */}
-          <AdvancedFilters />
+          <AdvancedFilters projects={projects} filters={advancedFilters} onChange={setAdvancedFilters} />
+          {(advancedFilters.selectedLanguages.length > 0 ||
+            advancedFilters.selectedCategories.length > 0 ||
+            advancedFilters.selectedFrameworks.length > 0 ||
+            advancedFilters.activityRangeDays[0] > 0 || advancedFilters.activityRangeDays[1] < 365 ||
+            advancedFilters.minStars > 0 || advancedFilters.onlyAnalyzed || advancedFilters.onlyNotArchived ||
+            activeConceptGroups.length > 0) && (
+            <div className="flex flex-wrap items-center gap-1 max-w-[32rem]" aria-label="Active filters">
+              {advancedFilters.selectedLanguages.map(language => (
+                <button key={language} onClick={() => setAdvancedFilters(current => removeAdvancedFilter(current, 'selectedLanguages', language))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60 hover:text-foreground" aria-label={`Remove language filter ${language}`}>{language} ×</button>
+              ))}
+              {advancedFilters.selectedCategories.map(category => (
+                <button key={category} onClick={() => setAdvancedFilters(current => removeAdvancedFilter(current, 'selectedCategories', category))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60 hover:text-foreground capitalize" aria-label={`Remove category filter ${category}`}>{category} ×</button>
+              ))}
+              {advancedFilters.selectedFrameworks.map(framework => (
+                <button key={framework} onClick={() => setAdvancedFilters(current => removeAdvancedFilter(current, 'selectedFrameworks', framework))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60 hover:text-foreground" aria-label={`Remove framework filter ${framework}`}>{framework} ×</button>
+              ))}
+              {(advancedFilters.activityRangeDays[0] > 0 || advancedFilters.activityRangeDays[1] < 365) && (
+                <button onClick={() => setAdvancedFilters(current => clearActivityRange(current))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove activity range filter">{advancedFilters.activityRangeDays[0]}–{advancedFilters.activityRangeDays[1]} days ×</button>
+              )}
+              {advancedFilters.minStars > 0 && (
+                <button onClick={() => setAdvancedFilters(current => ({ ...current, minStars: 0 }))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove minimum stars filter">{advancedFilters.minStars}+ stars ×</button>
+              )}
+              {advancedFilters.onlyAnalyzed && (
+                <button onClick={() => setAdvancedFilters(current => ({ ...current, onlyAnalyzed: false }))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove analyzed filter">Analyzed ×</button>
+              )}
+              {advancedFilters.onlyNotArchived && (
+                <button onClick={() => setAdvancedFilters(current => ({ ...current, onlyNotArchived: false }))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove archived filter">Not archived ×</button>
+              )}
+              {activeConceptGroups.map(group => (
+                <button key={group} onClick={() => setActiveConceptGroups(activeConceptGroups.filter(value => value !== group))} className="rounded-full border border-emerald-500/20 px-2 py-0.5 text-[9px] text-emerald-400" aria-label={`Remove concept filter ${group}`}>{group} ×</button>
+              ))}
+            </div>
+          )}
 
           {/* Smart search — tour target */}
           <div id="tour-smart-search">
