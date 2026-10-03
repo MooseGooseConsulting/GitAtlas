@@ -19,7 +19,7 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 
 // ── DB mock ─────────────────────────────────────────────────────────────────
-// Must be set up BEFORE the route is dynamically imported below so bun's
+// Must be set up BEFORE the route is dynamically imported below so Vitest's
 // module registry serves the mock to the route's static import of @/lib/db.
 const { mockUpdate } = vi.hoisted(() => ({
   mockUpdate: vi.fn((..._args: unknown[]) => Promise.resolve({ githubId: 1 })),
