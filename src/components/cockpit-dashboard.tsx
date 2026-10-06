@@ -25,9 +25,10 @@ import { SettingsDialog } from '@/components/settings-dialog';
 // trigger (a Button beside Settings) lives in this file. The panel itself
 // reads its open state from the Zustand store, so we just need to mount it.
 import { GraphTweaksPanel } from '@/components/graph-tweaks-panel';
-import { ConceptGroups, CONCEPT_GROUPS, getProjectsForGroup } from '@/components/concept-groups';
+import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById, getProjectsForGroup } from '@/components/concept-groups';
 import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters, clearActivityRange, removeAdvancedFilter } from '@/components/advanced-filters';
 import { ConceptDrilldown } from '@/components/concept-drilldown';
+import { CockpitActiveFilters } from '@/components/cockpit-active-filters';
 import { Badge } from '@/components/ui/badge';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
@@ -285,14 +286,7 @@ export function CockpitDashboard() {
     });
 
     // Apply concept group filtering
-    if (activeConceptGroups.length > 0) {
-      const conceptMatchIds = new Set<string>();
-      for (const groupKey of activeConceptGroups) {
-        const groupProjects = getProjectsForGroup(projects, groupKey);
-        groupProjects.forEach(p => conceptMatchIds.add(p.id));
-      }
-      filtered = filtered.filter(p => conceptMatchIds.has(p.id));
-    }
+    filtered = filterProjectsByConceptGroups(filtered, activeConceptGroups);
 
     // Apply advanced filters
     filtered = applyAdvancedFilters(filtered, advancedFilters);
@@ -440,7 +434,7 @@ export function CockpitDashboard() {
   // Drill down handler
   const handleDrillDown = useCallback((groupKey: string) => {
     const groupProjects = getProjectsForGroup(projects, groupKey);
-    const group = CONCEPT_GROUPS.find(g => g.key === groupKey);
+    const group = getConceptGroupById(groupKey);
     if (groupProjects.length === 0) return;
     setDrilldownProjects(groupProjects);
     setDrilldownTitle(groupKey);
@@ -555,39 +549,12 @@ export function CockpitDashboard() {
 
           {/* Advanced Filters */}
           <AdvancedFilters projects={projects} filters={advancedFilters} onChange={setAdvancedFilters} />
-          {(advancedFilters.selectedLanguages.length > 0 ||
-            advancedFilters.selectedCategories.length > 0 ||
-            advancedFilters.selectedFrameworks.length > 0 ||
-            advancedFilters.activityRangeDays[0] > 0 || advancedFilters.activityRangeDays[1] < 365 ||
-            advancedFilters.minStars > 0 || advancedFilters.onlyAnalyzed || advancedFilters.onlyNotArchived ||
-            activeConceptGroups.length > 0) && (
-            <div className="flex flex-wrap items-center gap-1 max-w-[32rem]" aria-label="Active filters">
-              {advancedFilters.selectedLanguages.map(language => (
-                <button key={language} onClick={() => setAdvancedFilters(current => removeAdvancedFilter(current, 'selectedLanguages', language))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60 hover:text-foreground" aria-label={`Remove language filter ${language}`}>{language} ×</button>
-              ))}
-              {advancedFilters.selectedCategories.map(category => (
-                <button key={category} onClick={() => setAdvancedFilters(current => removeAdvancedFilter(current, 'selectedCategories', category))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60 hover:text-foreground capitalize" aria-label={`Remove category filter ${category}`}>{category} ×</button>
-              ))}
-              {advancedFilters.selectedFrameworks.map(framework => (
-                <button key={framework} onClick={() => setAdvancedFilters(current => removeAdvancedFilter(current, 'selectedFrameworks', framework))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60 hover:text-foreground" aria-label={`Remove framework filter ${framework}`}>{framework} ×</button>
-              ))}
-              {(advancedFilters.activityRangeDays[0] > 0 || advancedFilters.activityRangeDays[1] < 365) && (
-                <button onClick={() => setAdvancedFilters(current => clearActivityRange(current))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove activity range filter">{advancedFilters.activityRangeDays[0]}–{advancedFilters.activityRangeDays[1]} days ×</button>
-              )}
-              {advancedFilters.minStars > 0 && (
-                <button onClick={() => setAdvancedFilters(current => ({ ...current, minStars: 0 }))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove minimum stars filter">{advancedFilters.minStars}+ stars ×</button>
-              )}
-              {advancedFilters.onlyAnalyzed && (
-                <button onClick={() => setAdvancedFilters(current => ({ ...current, onlyAnalyzed: false }))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove analyzed filter">Analyzed ×</button>
-              )}
-              {advancedFilters.onlyNotArchived && (
-                <button onClick={() => setAdvancedFilters(current => ({ ...current, onlyNotArchived: false }))} className="rounded-full border border-border/20 px-2 py-0.5 text-[9px] text-foreground/60" aria-label="Remove archived filter">Not archived ×</button>
-              )}
-              {activeConceptGroups.map(group => (
-                <button key={group} onClick={() => setActiveConceptGroups(activeConceptGroups.filter(value => value !== group))} className="rounded-full border border-emerald-500/20 px-2 py-0.5 text-[9px] text-emerald-400" aria-label={`Remove concept filter ${group}`}>{group} ×</button>
-              ))}
-            </div>
-          )}
+          <CockpitActiveFilters
+            filters={advancedFilters}
+            activeConceptGroups={activeConceptGroups}
+            onFiltersChange={setAdvancedFilters}
+            onConceptGroupsChange={setActiveConceptGroups}
+          />
 
           {/* Smart search — tour target */}
           <div id="tour-smart-search">
