@@ -25,9 +25,10 @@ import { SettingsDialog } from '@/components/settings-dialog';
 // trigger (a Button beside Settings) lives in this file. The panel itself
 // reads its open state from the Zustand store, so we just need to mount it.
 import { GraphTweaksPanel } from '@/components/graph-tweaks-panel';
-import { ConceptGroups, CONCEPT_GROUPS, getProjectsForGroup } from '@/components/concept-groups';
-import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters } from '@/components/advanced-filters';
+import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById, getProjectsForGroup } from '@/components/concept-groups';
+import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters, clearActivityRange, removeAdvancedFilter } from '@/components/advanced-filters';
 import { ConceptDrilldown } from '@/components/concept-drilldown';
+import { CockpitActiveFilters } from '@/components/cockpit-active-filters';
 import { Badge } from '@/components/ui/badge';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
@@ -90,6 +91,7 @@ export function CockpitDashboard() {
     // Why: cockpit triggers the panel via setShowGraphTweaksPanel; we don't
     // need to read the boolean here because GraphTweaksPanel subscribes.
     setShowGraphTweaksPanel,
+    activeConceptGroups, setActiveConceptGroups,
   } = useAtlasStore();
 
   const [smartSearchOpen, setSmartSearchOpen] = useState(false);
@@ -107,7 +109,6 @@ export function CockpitDashboard() {
   const [aiRecommendationsOpen, setAiRecommendationsOpen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<'activity' | 'commits'>('activity');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeConceptGroups, setActiveConceptGroups] = useState<string[]>([]);
   const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterState>(DEFAULT_FILTERS);
   const [drilldownOpen, setDrilldownOpen] = useState(false);
   const [drilldownProjects, setDrilldownProjects] = useState<Project[]>([]);
@@ -285,14 +286,7 @@ export function CockpitDashboard() {
     });
 
     // Apply concept group filtering
-    if (activeConceptGroups.length > 0) {
-      const conceptMatchIds = new Set<string>();
-      for (const groupKey of activeConceptGroups) {
-        const groupProjects = getProjectsForGroup(projects, groupKey);
-        groupProjects.forEach(p => conceptMatchIds.add(p.id));
-      }
-      filtered = filtered.filter(p => conceptMatchIds.has(p.id));
-    }
+    filtered = filterProjectsByConceptGroups(filtered, activeConceptGroups);
 
     // Apply advanced filters
     filtered = applyAdvancedFilters(filtered, advancedFilters);
@@ -437,35 +431,16 @@ export function CockpitDashboard() {
     }
   }, [isLoadingOrgRepos, hasOrgRepos, username, setProjects]);
 
-  // Concept group toggle handler
-  const handleToggleConceptGroup = useCallback((groupKey: string) => {
-    setActiveConceptGroups(prev => {
-      const next = prev.includes(groupKey) ? prev.filter(k => k !== groupKey) : [...prev, groupKey];
-      return next;
-    });
-  }, []);
-
   // Drill down handler
   const handleDrillDown = useCallback((groupKey: string) => {
     const groupProjects = getProjectsForGroup(projects, groupKey);
-    const group = CONCEPT_GROUPS.find(g => g.key === groupKey);
+    const group = getConceptGroupById(groupKey);
     if (groupProjects.length === 0) return;
     setDrilldownProjects(groupProjects);
     setDrilldownTitle(groupKey);
     setDrilldownIcon(group?.icon || '🔍');
     setDrilldownOpen(true);
   }, [projects]);
-
-  // Advanced filter count
-  const advancedFilterCount = useMemo(() => {
-    let count = 0;
-    if (advancedFilters.selectedLanguages.length > 0) count++;
-    if (advancedFilters.selectedCategories.length > 0) count++;
-    if (advancedFilters.minStars > 0) count++;
-    if (advancedFilters.onlyAnalyzed) count++;
-    if (advancedFilters.onlyNotArchived) count++;
-    return count;
-  }, [advancedFilters]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden page-load-animation">
@@ -573,7 +548,13 @@ export function CockpitDashboard() {
           <div className="h-4 w-px bg-border/10" />
 
           {/* Advanced Filters */}
-          <AdvancedFilters />
+          <AdvancedFilters projects={projects} filters={advancedFilters} onChange={setAdvancedFilters} />
+          <CockpitActiveFilters
+            filters={advancedFilters}
+            activeConceptGroups={activeConceptGroups}
+            onFiltersChange={setAdvancedFilters}
+            onConceptGroupsChange={setActiveConceptGroups}
+          />
 
           {/* Smart search — tour target */}
           <div id="tour-smart-search">

@@ -5,7 +5,7 @@
 // setConnectionSource) carry real logic that can regress silently. We test
 // the store in isolation – no React, no DOM – because the store itself is
 // pure synchronous state.
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach } from 'vitest';
 import { useAtlasStore } from '../store';
 import type { Project } from '../types';
 

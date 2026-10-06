@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 
-interface ConceptGroup {
+export interface ConceptGroup {
   id: string;
   icon: string;
   label: string;
@@ -250,9 +250,26 @@ export function ConceptGroups() {
 // Export for use in filtering logic
 export { CONCEPT_GROUPS, matchesConceptGroup };
 
-// Utility for cockpit-dashboard to get projects matching a specific group
+export function getConceptGroupById(groupId: string): ConceptGroup | undefined {
+  return CONCEPT_GROUPS.find(group => group.id === groupId);
+}
+
+// Utility for cockpit-dashboard to get projects matching one or more groups
 export function getProjectsForGroup(projects: Project[], groupId: string): Project[] {
-  const group = CONCEPT_GROUPS.find(g => g.id === groupId);
+  const group = getConceptGroupById(groupId);
   if (!group) return [];
   return projects.filter(p => matchesConceptGroup(p, group));
+}
+
+// Concept selections combine with OR semantics; the caller intersects this
+// set with search and advanced filters.
+export function filterProjectsByConceptGroups(projects: Project[], groupIds: string[]): Project[] {
+  if (groupIds.length === 0) return projects;
+  const matchingIds = new Set<string>();
+  for (const groupId of groupIds) {
+    for (const project of getProjectsForGroup(projects, groupId)) {
+      matchingIds.add(project.id);
+    }
+  }
+  return projects.filter(project => matchingIds.has(project.id));
 }

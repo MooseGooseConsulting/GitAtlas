@@ -15,15 +15,17 @@
 //   1. Missing GITHUB_WEBHOOK_SECRET → 503, not a 2xx that silently writes.
 //   2. Wrong / absent signature → 401, not processed.
 //   3. The route NEVER touches the DB without first passing HMAC verification.
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 
 // ── DB mock ─────────────────────────────────────────────────────────────────
-// Must be set up BEFORE the route is dynamically imported below so bun's
+// Must be set up BEFORE the route is dynamically imported below so Vitest's
 // module registry serves the mock to the route's static import of @/lib/db.
-const mockUpdate = mock(() => Promise.resolve({ githubId: 1 }));
+const { mockUpdate } = vi.hoisted(() => ({
+  mockUpdate: vi.fn((..._args: unknown[]) => Promise.resolve({ githubId: 1 })),
+}));
 
-mock.module('@/lib/db', () => ({
+vi.mock('@/lib/db', () => ({
   db: {
     project: {
       update: mockUpdate,
