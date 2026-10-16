@@ -49,19 +49,22 @@ export async function POST(request: NextRequest) {
       where: { ownerLogin: username },
       select: { githubId: true, githubUpdatedAt: true },
     });
-    const existingMap = new Map(existing.map((r) => [r.githubId, r.githubUpdatedAt]));
+    // Prisma returns githubId as bigint on PostgreSQL while GitHub supplies
+    // numbers; Map keys use SameValueZero (42n !== 42), so normalize both
+    // sides to String for the lookup.
+    const existingMap = new Map(existing.map((r) => [String(r.githubId), r.githubUpdatedAt]));
 
     let changed = 0;
     let created = 0;
     for (const repo of repos) {
       const newUpdated = new Date(repo.updated_at);
-      const prev = existingMap.get(repo.id);
+      const prev = existingMap.get(String(repo.id));
 
       if (!prev) {
         // Brand new repo. Upsert a thin row; enrich worker will hydrate it.
         await db.project.create({
           data: {
-            githubId: repo.id,
+            githubId: BigInt(repo.id),
             name: repo.name,
             fullName: repo.full_name,
             description: repo.description,
@@ -92,7 +95,7 @@ export async function POST(request: NextRequest) {
         // Why null both fields: marking analyzedAt/deepAnalyzedAt as null is the
         // signal the enrich-next worker uses to pick a repo up for re-analysis.
         await db.project.update({
-          where: { githubId: repo.id },
+          where: { githubId: BigInt(repo.id) },
           data: {
             githubUpdatedAt: newUpdated,
             pushedAt: repo.pushed_at ? new Date(repo.pushed_at) : null,

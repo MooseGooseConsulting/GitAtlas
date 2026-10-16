@@ -193,11 +193,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       jobId: job.id,
       totalRepos: uniqueRepos.length,
-      projects: projects.map(p => ({
-        ...p,
-        topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
-        tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
-      })),
+      projects: projects.map(p => {
+        // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot
+        // serialize bigint, so convert at the API boundary. Guard against
+        // precision loss for values above Number.MAX_SAFE_INTEGER.
+        const githubIdNumber = Number(p.githubId);
+        if (!Number.isSafeInteger(githubIdNumber)) {
+          throw new Error(
+            `githubId ${p.githubId.toString()} for project ${p.id} exceeds Number.MAX_SAFE_INTEGER; refusing lossy conversion.`
+          );
+        }
+        // Deep-analysis columns are persisted as JSON strings; parse them
+        // back to structured values at the API boundary. Malformed payloads
+        // fall back to null rather than failing the whole response.
+        const parseJsonField = (value: unknown) => {
+          if (value == null) return null;
+          if (typeof value !== 'string') return value;
+          try {
+            return JSON.parse(value);
+          } catch {
+            return null;
+          }
+        };
+        return {
+          ...p,
+          githubId: githubIdNumber,
+          topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
+          tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
+          fileTree: parseJsonField(p.fileTree),
+          dependencies: parseJsonField(p.dependencies),
+          keyFiles: parseJsonField(p.keyFiles),
+          similarProjects: parseJsonField(p.similarProjects),
+          codeSignature: parseJsonField(p.codeSignature),
+        };
+      }),
     });
   } catch (error: any) {
     console.error('Fetch error:', error);

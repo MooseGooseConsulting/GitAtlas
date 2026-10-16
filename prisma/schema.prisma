@@ -3,13 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model Project {
   id               String    @id @default(cuid())
-  githubId         Int       @unique
+  githubId         BigInt    @unique
   name             String
   fullName         String
   description      String?
@@ -28,8 +28,12 @@ model Project {
   ownerLogin       String
   ownerType        String    @default("User")
   ownerAvatarUrl   String?
-  defaultBranch    String    @default("main")
-  visibility       String    @default("public")
+  defaultBranch        String    @default("main")
+  defaultBranchHeadSha String?
+  inventoryStatus      String    @default("unverified")
+  inventoryFetchedAt   DateTime?
+  inventoryLastSuccessAt DateTime?
+  visibility           String    @default("public")
   summary          String?
   tags             String?
   category         String?
@@ -45,8 +49,148 @@ model Project {
   deepAnalyzedAt   DateTime?
   proposedReadme   String?   // AI-generated README based on actual code
   readmeGeneratedAt DateTime?
-  similarProjects  String?   // JSON string of similar project IDs + reasons
-  codeSignature    String?   // JSON string of code patterns/technologies detected
+  similarProjects   String? // JSON string of similar project IDs + reasons
+  codeSignature     String? // JSON string of code patterns/technologies detected
+  workResources     WorkResource[]
+  analyses          RepositoryAnalysis[]
+  ownerNotes        OwnerNote[]
+  edgesFrom         ProjectEdge[]       @relation("EdgeSource")
+  edgesTo           ProjectEdge[]       @relation("EdgeTarget")
+}
+
+model EstateAnalysis {
+  id                 String    @id @default(cuid())
+  inputHash          String    @unique
+  promptVersion      String
+  model              String
+  analysisVersionIds String
+  coverageJson       String
+  resultJson         String?
+  status             String    @default("pending")
+  errorCode          String?
+  retryAt            DateTime?
+  createdAt          DateTime  @default(now())
+  completedAt        DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  @@index([status, retryAt])
+  @@index([createdAt])
+}
+
+model ProjectEdge {
+  id               String   @id @default(cuid())
+  sourceProjectId  String
+  sourceProject    Project  @relation("EdgeSource", fields: [sourceProjectId], references: [id], onDelete: Cascade)
+  targetProjectId  String
+  targetProject    Project  @relation("EdgeTarget", fields: [targetProjectId], references: [id], onDelete: Cascade)
+  category         String   @default("heuristic_similarity")
+  relationshipType String
+  confidence       String   @default("exploratory")
+  evidenceJson     String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([sourceProjectId, targetProjectId, relationshipType])
+  @@index([targetProjectId])
+}
+
+model RepositoryAnalysis {
+  id               String   @id @default(cuid())
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  analyzedSha      String?
+  evidenceHash     String
+  inputHash        String
+  promptVersion    String
+  model            String
+  evidenceJson     String
+  ownerNotesJson   String
+  samplingBoundary String
+  resultJson       String?
+  status           String   @default("pending")
+  errorCode        String?
+  retryAt          DateTime?
+  createdAt        DateTime @default(now())
+  completedAt      DateTime?
+  updatedAt        DateTime @updatedAt
+
+  @@unique([projectId, inputHash])
+  @@index([projectId, status, createdAt])
+  @@index([status, retryAt])
+}
+
+model OwnerNote {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author     String
+  provenance String   @default("owner")
+  note       String
+  createdAt  DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
+
+model WorkResource {
+  id             String          @id @default(cuid())
+  projectId      String
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceType     String
+  externalId     String
+  issueNumber    Int?
+  title          String?
+  sourceUrl      String
+  sourceState    String
+  refName        String?
+  createdAt      DateTime?
+  sourceUpdatedAt DateTime?
+  sourceClosedAt DateTime?
+  lastSeenAt     DateTime
+  references     WorkReference[] @relation("ReferenceSource")
+  referencedBy   WorkReference[] @relation("ReferenceTarget")
+
+  @@unique([projectId, sourceType, externalId])
+  @@index([projectId, sourceType, sourceUpdatedAt])
+}
+
+model WorkReference {
+  id                String       @id @default(cuid())
+  sourceResourceId  String
+  sourceResource    WorkResource @relation("ReferenceSource", fields: [sourceResourceId], references: [id], onDelete: Cascade)
+  targetResourceId String?
+  targetResource   WorkResource? @relation("ReferenceTarget", fields: [targetResourceId], references: [id], onDelete: SetNull)
+  targetSourceType String?
+  targetExternalId String
+  targetUrl        String?
+  relationshipType String
+  evidence         String
+  category         String        @default("explicit_github_link")
+  confidence       String        @default("authoritative")
+  intent           String        @default("reference")
+  discoveredAt     DateTime      @default(now())
+
+  @@unique([sourceResourceId, targetExternalId, relationshipType])
+  @@index([targetResourceId])
+}
+
+model SemanticWorkerState {
+  id              String   @id
+  cursorProjectId String?
+  updatedAt       DateTime @updatedAt
+}
+
+model SyncState {
+  id              String   @id @default(cuid())
+  scope           String   @unique
+  status          String   @default("unknown")
+  fetchedAt       DateTime?
+  lastSuccessAt   DateTime?
+  retryAt       DateTime?
+  itemCount     Int       @default(0)
+  unsupportedCount Int    @default(0)
+  pagesFetched  Int       @default(0)
+  errorCode       String?
+  updatedAt       DateTime @updatedAt
 }
 
 model AnalysisJob {

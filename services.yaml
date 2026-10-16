@@ -1,0 +1,34 @@
+commands:
+  install: bun install
+  generate: bunx prisma generate
+  test: bun run test
+  # Unit tests are one-shot Vitest; integration uses a rollback-only PostgreSQL fixture.
+  test-integration: PGHOST=/run/postgresql PGDATABASE=gitatlas_dev bun run test:integration
+  db-migrate: bun run db:migrate
+  db-import-sqlite: bun run db:import-sqlite
+  db-test-migration: bun run db:test-migration
+  db-test-semantic: bun run db:test-semantic
+  db-test-estate: bun run db:test-estate
+  typecheck: bunx tsc --noEmit
+  lint: bun run lint
+  format: bun run format:check
+  build: bun run build
+  image-build: sudo -n docker build -t gitatlas:local .
+
+services:
+  postgres:
+    start: pg_isready -h /run/postgresql -p 5432 || sudo -n pg_ctlcluster 16 main start
+    stop: "true # PostgreSQL 5432 is shared; leave running"
+    healthcheck: pg_isready -h /run/postgresql -p 5432
+    port: 5432
+    depends_on: []
+  web:
+    start: mkdir -p tmp || exit; ((PORT=3100 exec ./node_modules/.bin/next dev -p 3100) & wait) & echo $! > tmp/web.pid; wait
+    # The recorded PID is the launcher subshell; the actual next dev and its
+    # next-server child are its children, so the child chain must be killed too
+    # (verified 2026-10-12: killing only the recorded PID left port 3100 up).
+    stop: "if [ -f tmp/web.pid ]; then P=$(cat tmp/web.pid); C=$(pgrep -P \"$P\" 2>/dev/null); G=$(pgrep -P \"$C\" 2>/dev/null); kill $P $C $G 2>/dev/null; fi"
+    # Root is an initial process probe; the image/health feature replaces it with DB-aware /healthz.
+    healthcheck: curl -sf http://127.0.0.1:3100/
+    port: 3100
+    depends_on: [postgres]
