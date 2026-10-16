@@ -32,12 +32,12 @@
   live `gitatlas_dev` (2026-09-30) are now skipped and reported instead of
   making the command exit 1. The row is never overwritten or restored from
   SQLite.
-- Post-insert verification is now weaker than it looks: the loop at
-  `scripts/import-sqlite.ts:158-170` calls `assertSameLegacyRecord` for each
-  inserted row but ignores its boolean, so only a *missing* row throws; a
-  freshly inserted row whose stored fields differ is not reported.
+- Post-insert verification throws on mismatch: the loop at
+  `scripts/import-sqlite.ts:157-164` calls `assertSameLegacyRecord` for each
+  inserted row and throws when it returns false, so a freshly inserted row
+  whose stored fields differ is reported.
 - `bun run db:test-migration` now runs the automated isolated wrapper
-  (`package.json:13` -> `scripts/test-postgres-migration-isolated.ts`), which
+  (`package.json` `db:test-migration` -> `scripts/test-postgres-migration-isolated.ts`), which
   creates a process-unique `gitatlas_verify_<uuid>` schema in the configured
   database, applies migrations twice, runs `scripts/test-postgres-migration.ts`
   (identical rerun, changed same-ID preserved, different-ID conflict rejected,

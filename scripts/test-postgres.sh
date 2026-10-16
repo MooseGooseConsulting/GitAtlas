@@ -7,7 +7,7 @@ if [[ -z "${PGDATABASE:-}" ]]; then
 fi
 
 case "$PGDATABASE" in
-  gitatlas_dev|gitatlas_test) ;;
+  gitatlas_dev|gitatlas_test|gitatlas_test_1) ;;
   *)
     echo "Refusing PostgreSQL fixture on database '$PGDATABASE'." >&2
     exit 2

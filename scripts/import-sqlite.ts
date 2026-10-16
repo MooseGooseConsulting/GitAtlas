@@ -182,21 +182,27 @@ export async function importSqliteDatabase(sourcePath: string, prisma: PrismaCli
       };
     });
 
-    const importCounts = await prisma.$transaction(async (transaction) => {
-      const counts: Record<
-        string,
-        { imported: number; skipped: number; divergent: number }
-      > = {};
-      for (const imported of data) {
-        const table = importTables.find((candidate) => candidate.table === imported.table)!;
-        counts[imported.table] = await importTable(
-          transaction as unknown as PrismaClient,
-          table,
-          imported.rows,
-        );
-      }
-      return counts;
-    });
+    const importCounts = await prisma.$transaction(
+      async (transaction) => {
+        const counts: Record<
+          string,
+          { imported: number; skipped: number; divergent: number }
+        > = {};
+        for (const imported of data) {
+          const table = importTables.find((candidate) => candidate.table === imported.table)!;
+          counts[imported.table] = await importTable(
+            transaction as unknown as PrismaClient,
+            table,
+            imported.rows,
+          );
+        }
+        return counts;
+      },
+      // Prisma defaults interactive transactions to a 5s timeout; the
+      // multi-row import with per-row verification reads can exceed that
+      // on large legacy databases or slow connections.
+      { maxWait: 10_000, timeout: 10 * 60_000 },
+    );
 
     const totals: Record<string, number> = {};
     for (const entry of importTables) {

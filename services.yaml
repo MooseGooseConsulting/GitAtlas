@@ -23,7 +23,7 @@ services:
     port: 5432
     depends_on: []
   web:
-    start: mkdir -p tmp && (PORT=3100 exec ./node_modules/.bin/next dev -p 3100) & echo $! > tmp/web.pid; wait
+    start: mkdir -p tmp || exit; ((PORT=3100 exec ./node_modules/.bin/next dev -p 3100) & wait) & echo $! > tmp/web.pid; wait
     # The recorded PID is the launcher subshell; the actual next dev and its
     # next-server child are its children, so the child chain must be killed too
     # (verified 2026-10-12: killing only the recorded PID left port 3100 up).

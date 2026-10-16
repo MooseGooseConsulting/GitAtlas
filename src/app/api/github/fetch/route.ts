@@ -193,14 +193,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       jobId: job.id,
       totalRepos: uniqueRepos.length,
-      projects: projects.map(p => ({
-        ...p,
+      projects: projects.map(p => {
         // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot
-        // serialize bigint, so convert at the API boundary.
-        githubId: Number(p.githubId),
-        topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
-        tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
-      })),
+        // serialize bigint, so convert at the API boundary. Guard against
+        // precision loss for values above Number.MAX_SAFE_INTEGER.
+        const githubIdNumber = Number(p.githubId);
+        if (!Number.isSafeInteger(githubIdNumber)) {
+          throw new Error(
+            `githubId ${p.githubId.toString()} for project ${p.id} exceeds Number.MAX_SAFE_INTEGER; refusing lossy conversion.`
+          );
+        }
+        return {
+          ...p,
+          githubId: githubIdNumber,
+          topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
+          tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
+        };
+      }),
     });
   } catch (error: any) {
     console.error('Fetch error:', error);
