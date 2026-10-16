@@ -1,0 +1,2 @@
+ALTER TABLE "SyncState"
+ADD COLUMN "unsupportedCount" INTEGER NOT NULL DEFAULT 0;
