@@ -15,4 +15,8 @@ jobs:
       - name: Lint
         run: bun run lint
       - name: Test
-        run: bunx prisma generate && bunx vitest run
+        # Generate needs a PostgreSQL-format URL (schema provider is
+        # postgresql); the tracked .env SQLite URL would P1012 on runners
+        # without DATABASE_URL configured. Generate is build-time only —
+        # no DB connection is opened.
+        run: DATABASE_URL=${DATABASE_URL:-postgresql://ci:ci@localhost:5432/gitatlas_ci} bunx prisma generate && bunx vitest run
