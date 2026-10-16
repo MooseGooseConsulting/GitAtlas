@@ -69,6 +69,7 @@ type ProjectInput = {
   inventoryStatus?: string;
   language: string | null;
   topics: string;
+  readmeContent?: string | null;
 };
 
 type WorkEvidence = {
@@ -220,9 +221,13 @@ function retryDate(code: string, now = Date.now()) {
   const delay =
     code === "free_quota_exhausted"
       ? QUOTA_RETRY_MS
-      : code === "free_model_unavailable"
-        ? 60 * 60 * 1000
-        : 5 * 60 * 1000;
+      : code === "missing_config"
+        // Missing configuration cannot self-heal by waiting; use the
+        // standard backoff so callers persist failed work with a retryAt.
+        ? 5 * 60 * 1000
+        : code === "free_model_unavailable"
+          ? 60 * 60 * 1000
+          : 5 * 60 * 1000;
   return new Date(now + delay);
 }
 
@@ -291,7 +296,7 @@ export async function runNextSemanticAnalysis(
         language: true,
         topics: true,
       },
-    }) as Promise<ProjectInput[]>;
+    }) as unknown as Promise<ProjectInput[]>;
 
   let cursor = useCursor ? await loadWorkerCursor() : null;
   let projects = await fetchProjectWindow(cursor);
@@ -372,15 +377,21 @@ export async function runNextSemanticAnalysis(
     lastScannedId = project.id;
     const workResourcesForProject = resourcesByProject.get(project.id) ?? [];
     const notesForProject = notesByProject.get(project.id) ?? [];
+    // Fetch source samples BEFORE hashing: the completed-row lookup must
+    // cover the same bounded evidence the model will see, otherwise a README
+    // or issue/commit change at the same SHA silently reuses a stale result.
+    const sourceSamples = await fetchRepositorySourceSamples(project);
     const revisionInput = buildSemanticInput(
       project,
       workResourcesForProject,
       notesForProject,
+      sourceSamples,
     );
     const evidenceHash = sha256({
       revisionEvidence: revisionInput.evidence,
       ownerNotes: revisionInput.ownerNotes,
       sourceRevision: project.defaultBranchHeadSha,
+      sourceSamples,
       sourceSamplePolicy: "up-to-2-files-at-1600-chars-v1",
     });
     const inputHash = sha256({
@@ -412,11 +423,13 @@ export async function runNextSemanticAnalysis(
       continue;
     }
 
+    // Factory order (shard-lib ledger): mark superseded completed rows stale
+    // BEFORE sampling/creating the new revision, so a changed SHA or changed
+    // same-SHA evidence always retires prior completed history on this path.
     await db.repositoryAnalysis.updateMany({
       where: { projectId: project.id, status: "completed" },
       data: { status: "stale" },
     });
-    const sourceSamples = await fetchRepositorySourceSamples(project);
     if (sourceSamples.length === 0) {
       const retryAt = retryDate("source_sample_unavailable");
       const row = existing
@@ -453,12 +466,6 @@ export async function runNextSemanticAnalysis(
         retryAt: retryAt.toISOString(),
       };
     }
-    const input = buildSemanticInput(
-      project,
-      workResourcesForProject,
-      notesForProject,
-      sourceSamples,
-    );
     const row = existing
       ? await db.repositoryAnalysis.update({
           where: { id: existing.id },
@@ -472,15 +479,15 @@ export async function runNextSemanticAnalysis(
             inputHash,
             promptVersion: SEMANTIC_PROMPT_VERSION,
             model: requestedModel,
-            evidenceJson: JSON.stringify(input.evidence),
-            ownerNotesJson: JSON.stringify(input.ownerNotes),
-            samplingBoundary: input.samplingBoundary,
+            evidenceJson: JSON.stringify(revisionInput.evidence),
+            ownerNotesJson: JSON.stringify(revisionInput.ownerNotes),
+            samplingBoundary: revisionInput.samplingBoundary,
             status: "processing",
           },
         });
     selected = {
       project,
-      input,
+      input: revisionInput,
       inputHash,
       evidenceHash,
       model: requestedModel,
@@ -499,7 +506,7 @@ export async function runNextSemanticAnalysis(
     return { status: sawSkipped ? "skipped" : "idle" };
   }
 
-  const verifiedModel = await getVerifiedFreeModel();
+  const verifiedModel = await getVerifiedFreeModel(selected.model);
   if (!verifiedModel || verifiedModel !== selected.model) {
     return persistFailure(selected.analysisId, "free_model_unavailable", true, {
       projectId: selected.project.id,
@@ -558,6 +565,10 @@ export async function runNextSemanticAnalysis(
     };
   } catch (error) {
     const code = errorCode(error);
+    // Only explicit quota exhaustion defers as pending; missing
+    // configuration (no API key) and other failures persist as failed work
+    // with retryAt so a later tick can re-attempt after the operator fixes
+    // the environment.
     const pending = code === "free_quota_exhausted" || code === "provider_failure";
     return persistFailure(selected.analysisId, code, pending, {
       projectId: selected.project.id,

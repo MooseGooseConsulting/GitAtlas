@@ -7,6 +7,9 @@ import { chat } from '@/lib/llm';
 import { isInternalRequestAuthorized } from '@/lib/internal-sync-auth';
 
 export async function POST(request: NextRequest) {
+  // KEEP: internal token gate. UI (page.tsx) and sync-worker send
+  // Authorization: Bearer <GITATLAS_INTERNAL_SYNC_TOKEN>; unauth callers get
+  // 401 by design. Do not remove this gate (finding A).
   if (!isInternalRequestAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

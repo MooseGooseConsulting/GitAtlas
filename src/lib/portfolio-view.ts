@@ -142,8 +142,18 @@ function scopeLabelFor(
     }
   }
 
+  // Finding Y: an explicit `unattempted` sync status must keep its
+  // `unattempted` label (never attempted ≠ checked-and-empty). The trailing
+  // `empty` applies only when no unattempted scopes exist and no rows were
+  // retained; the always-zero count below is fixed to count unattempted
+  // scopes.
+  const hasUnattempted = states.some((state) => state.status === "unattempted");
+  const unattemptedCount = states.filter(
+    (state) => state.status === "unattempted",
+  ).length;
+
   let label: WorkScopeLabel;
-  if (states.length === 0) {
+  if (states.length === 0 || hasUnattempted) {
     label = "unattempted";
   } else if (unsupportedCount > 0 && currentCount === 0 && staleCount === 0 && failedCount === 0) {
     label = "unsupported";
@@ -170,7 +180,7 @@ function scopeLabelFor(
       staleCount,
       failedCount,
       unsupportedCount,
-      unattemptedProjects: 0,
+      unattemptedProjects: unattemptedCount,
       lastSuccessAt: latestSuccess ? latestSuccess.toISOString() : null,
       errorCodes,
     },

@@ -11,6 +11,18 @@ const HEAD_SCOPE = "github:default-branch-heads";
 const HEAD_CONCURRENCY = 4;
 
 function projectData(repo: GithubRepository, inventoryAt: Date) {
+  // Finding H (disclosed skip): this replacement import path never fetches
+  // or writes `readmeContent` — a per-repo README fetch was dropped for
+  // quota/API-cost reasons, so newly imported projects reach analysis with
+  // readmeContent NULL. Downstream `fetchRepositorySourceSamples` already
+  // treats a missing README as one absent sample (falls back to metadata +
+  // issues/commits, or `source_sample_unavailable`), so this is a coverage
+  // gap, not a crash. Restoring a bounded README writer is a follow-up;
+  // until then the skip is intentional and disclosed here.
+  // A repository without an observed head SHA (failed or unsupported head
+  // lookup) must never read as a verified current row: clear any stale SHA
+  // via an explicit null and mark the row unverified instead of current.
+  const headVerified = repo.default_branch_head_sha != null;
   return {
     name: repo.name,
     fullName: repo.full_name,
@@ -31,13 +43,13 @@ function projectData(repo: GithubRepository, inventoryAt: Date) {
     ownerType: repo.owner?.type ?? "User",
     ownerAvatarUrl: repo.owner?.avatar_url ?? null,
     defaultBranch: repo.default_branch ?? "unknown",
-    inventoryStatus: "current",
+    inventoryStatus: headVerified ? "current" : "unverified",
     inventoryFetchedAt: inventoryAt,
     inventoryLastSuccessAt: inventoryAt,
     visibility: repo.visibility ?? (repo.private ? "private" : "public"),
-    ...(repo.default_branch_head_sha
-      ? { defaultBranchHeadSha: repo.default_branch_head_sha }
-      : {}),
+    // Clear stale SHAs when the head lookup failed or was unsupported;
+    // omitting the field here would retain the previous row's SHA.
+    defaultBranchHeadSha: repo.default_branch_head_sha ?? null,
   };
 }
 
@@ -77,6 +89,15 @@ export async function refreshAccessibleInventory(
   try {
     const inventory = suppliedInventory ?? (await fetchAccessibleRepositories());
     const successAt = inventory.fetchedAt;
+    // Bounded page cap hit with more provider pages advertised: the listing
+    // is incomplete (persisted rows are honest but partial), so the scopes
+    // below report deferred/partial instead of current.
+    const inventoryTruncated = inventory.truncated === true;
+    // Hoisted for the success return below: the transaction callback also
+    // persists this scope status, but the return lives outside that closure
+    // (a shadowed inner const here previously left the return unbound,
+    // throwing ReferenceError -> sync_failure on every success path).
+    const inventoryStatus = inventoryTruncated ? "partial" : "current";
     const priorProjects = await db.project.findMany({
       where: {
         githubId: { in: inventory.repositories.map((repo) => repo.id) },
@@ -89,7 +110,10 @@ export async function refreshAccessibleInventory(
         pushedAt: true,
       },
     });
-    const priorById = new Map(priorProjects.map((project) => [project.githubId, project]));
+    // Prisma returns BigInt for githubId on PostgreSQL while the provider
+    // listing uses numbers; normalize both sides to Number so the lookup
+    // works against real rows and number-keyed test mocks alike.
+    const priorById = new Map(priorProjects.map((project) => [Number(project.githubId), project]));
     const headFailures: GithubInventoryError[] = [];
     const priorHeadState = await db.syncState.findUnique({
       where: { scope: HEAD_SCOPE },
@@ -137,10 +161,13 @@ export async function refreshAccessibleInventory(
           try {
             headRequests++;
             const result = await fetchDefaultBranchHeadSha(repo.full_name, branch);
-            repo.default_branch_head_sha = result.sha ?? undefined;
             if (result.unsupported) {
+              // Unsupported (empty repo, missing ref): clear any stale SHA
+              // carried on a caller-supplied inventory row and count it.
+              repo.default_branch_head_sha = undefined;
               unsupportedHeads++;
             } else if (result.sha) {
+              repo.default_branch_head_sha = result.sha;
               observedHeads++;
             } else {
               throw new GithubInventoryError({
@@ -149,6 +176,9 @@ export async function refreshAccessibleInventory(
               });
             }
           } catch (error) {
+            // Failed head lookup: never retain a stale SHA from a supplied
+            // inventory row; projectData marks the row unverified instead.
+            repo.default_branch_head_sha = undefined;
             const failure =
               error instanceof GithubInventoryError
                 ? error
@@ -195,64 +225,71 @@ export async function refreshAccessibleInventory(
           inventoryFetchedAt: successAt,
         },
       });
+      // A truncated listing is persisted honestly but incompletely: the
+      // inventory scope reports partial (never current) and does not advance
+      // lastSuccessAt, so freshness readers never mistake it for complete.
       await tx.syncState.update({
         where: { scope: INVENTORY_SCOPE },
         data: {
-          status: "current",
+          status: inventoryStatus,
           fetchedAt: successAt,
-          lastSuccessAt: successAt,
+          ...(inventoryTruncated ? {} : { lastSuccessAt: successAt }),
           itemCount: inventory.repositories.length,
           pagesFetched: inventory.pagesFetched,
           retryAt: null,
-          errorCode: null,
+          errorCode: inventoryTruncated ? "truncated_listing" : null,
         },
       });
       const headError = headFailures[0];
+      const headStatus = headError?.code === "rate_limited"
+        ? "deferred"
+        : headFailures.length || inventoryTruncated
+          ? "partial"
+          : "current";
+      const headComplete = headStatus === "current";
+      const headErrorCode = headError?.code
+        ?? (inventoryTruncated ? "truncated_listing" : null)
+        ?? (unsupportedHeads ? "unsupported_resources" : null);
       await tx.syncState.upsert({
         where: { scope: HEAD_SCOPE },
         create: {
           scope: HEAD_SCOPE,
-          status: headError?.code === "rate_limited"
-            ? "deferred"
-            : headFailures.length
-              ? "partial"
-              : "current",
+          status: headStatus,
           fetchedAt: successAt,
-          lastSuccessAt: headFailures.length ? null : successAt,
+          lastSuccessAt: headComplete ? successAt : null,
           itemCount: observedHeads,
           unsupportedCount: unsupportedHeads,
           pagesFetched: headRequests,
           retryAt: headError?.retryAt ? new Date(headError.retryAt) : null,
-          errorCode: headError?.code ?? (unsupportedHeads ? "unsupported_resources" : null),
+          errorCode: headErrorCode,
         },
         update: {
-          status: headError?.code === "rate_limited"
-            ? "deferred"
-            : headFailures.length
-              ? "partial"
-              : "current",
+          status: headStatus,
           fetchedAt: successAt,
-          ...(headFailures.length ? {} : { lastSuccessAt: successAt }),
+          ...(headComplete ? { lastSuccessAt: successAt } : {}),
           itemCount: observedHeads,
           unsupportedCount: unsupportedHeads,
           pagesFetched: headRequests,
           retryAt: headError?.retryAt ? new Date(headError.retryAt) : null,
-          errorCode: headError?.code ?? (unsupportedHeads ? "unsupported_resources" : null),
+          errorCode: headErrorCode,
         },
       });
     });
 
     return {
-      status: "current" as const,
+      status: inventoryStatus,
       fetchedAt: successAt,
       lastSuccessAt: successAt,
       itemCount: inventory.repositories.length,
       pagesFetched: inventory.pagesFetched,
+      truncated: inventoryTruncated,
       headStatus: headFailures.length
         ? headFailures.some((failure) => failure.code === "rate_limited")
           ? "deferred"
           : "partial"
-        : "current",
+        : inventoryTruncated
+          ? "partial"
+          : "current",
       observedHeads,
       unsupportedHeads,
       reconciledCount: inventory.repositories.length,

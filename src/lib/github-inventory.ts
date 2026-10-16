@@ -70,6 +70,12 @@ export interface AccessibleInventory {
   repositories: GithubRepository[];
   pagesFetched: number;
   fetchedAt: Date;
+  /**
+   * True when the provider still advertises a `rel="next"` page after the
+   * bounded page cap. Callers must report deferred/partial, never current.
+   * Optional so previously-constructed inventories keep type-checking.
+   */
+  truncated?: boolean;
 }
 
 export type InventoryErrorCode =
@@ -247,6 +253,7 @@ export async function fetchAccessibleRepositories(
   const repositories: GithubRepository[] = [];
   let next: string | null = LISTING_PATH;
   let pagesFetched = 0;
+  let truncated = false;
   const seen = new Set<string>();
 
   while (next) {
@@ -267,11 +274,16 @@ export async function fetchAccessibleRepositories(
     }
     repositories.push(...(page as GithubRepository[]));
     pagesFetched++;
-    if (pagesFetched >= 100) break;
     next = nextPagePath(response.headers.get("link"));
+    if (pagesFetched >= 100) {
+      // Bounded page cap: if the provider still advertises more, the
+      // listing is incomplete and must surface as deferred/partial.
+      truncated = next !== null;
+      break;
+    }
   }
 
-  return { repositories, pagesFetched, fetchedAt: new Date() };
+  return { repositories, pagesFetched, fetchedAt: new Date(), truncated };
 }
 
 function encodeBranchRef(branch: string): string {
@@ -290,9 +302,10 @@ export interface DefaultBranchHead {
 /**
  * Resolve the head SHA of a repository's default branch via a single-commit
  * read. Returns `{ sha: null, unsupported: true }` when the provider reports
- * the ref as unavailable (404/409/422: empty repository, archived edge
- * cases); rate limits and exhausted transient failures throw so the caller
- * can defer the whole refresh instead of recording a false head.
+ * the ref as unavailable via the listing path's 404 scope guard or a
+ * 404/409/422 on the commits read (missing ref, empty repository, archived
+ * edge cases); rate limits and exhausted transient failures throw so the
+ * caller can defer the whole refresh instead of recording a false head.
  */
 export async function fetchDefaultBranchHead(
   owner: string,
@@ -306,9 +319,12 @@ export async function fetchDefaultBranchHead(
     options,
     0,
   ).catch((error: unknown) => {
+    // 404/409/422 all mean "no committable head here" (missing ref, empty
+    // repository, archived edge cases). Map every one to unsupported so a
+    // 404 never reads as a provider error, per the function contract.
     if (
       error instanceof GithubInventoryError &&
-      (error.status === 409 || error.status === 422)
+      (error.status === 404 || error.status === 409 || error.status === 422)
     ) {
       return null;
     }

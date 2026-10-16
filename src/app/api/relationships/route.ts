@@ -78,15 +78,45 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Finding T: per-row try/catch so one corrupt evidenceJson row cannot
+    // 503 the whole GET (matches the guarded parses in the estate route).
+    function safeEvidenceJson(raw: string): unknown {
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        return null;
+      }
+    }
+    // Finding M: Prisma BigInt githubId cannot be JSON-serialized; convert
+    // with the Number() pattern used by github/projects (safe integer, else
+    // string).
+    function safeGithubId(value: unknown): number | string | null {
+      if (typeof value === "bigint") {
+        const asNumber = Number(value);
+        return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+      }
+      return value as number | string | null;
+    }
+
     return NextResponse.json({
       heuristic: heuristicEdges.map((edge) => ({
         id: edge.id,
         category: edge.category,
         confidence: edge.confidence,
         relationshipType: edge.relationshipType,
-        sourceProject: edge.sourceProject,
-        targetProject: edge.targetProject,
-        evidence: JSON.parse(edge.evidenceJson) as unknown,
+        sourceProject: {
+          githubId: safeGithubId(
+            (edge.sourceProject as { githubId?: unknown })?.githubId,
+          ),
+          fullName: edge.sourceProject.fullName,
+        },
+        targetProject: {
+          githubId: safeGithubId(
+            (edge.targetProject as { githubId?: unknown })?.githubId,
+          ),
+          fullName: edge.targetProject.fullName,
+        },
+        evidence: safeEvidenceJson(edge.evidenceJson),
       })),
       evidenceBacked: references.map((reference) => ({
         id: reference.id,
@@ -95,9 +125,26 @@ export async function GET(request: NextRequest) {
         intent: reference.intent,
         relationshipType: reference.relationshipType,
         evidence: reference.evidence,
-        sourceProject: reference.sourceResource.project,
+        sourceProject: {
+          githubId: safeGithubId(
+            (reference.sourceResource.project as { githubId?: unknown })
+              ?.githubId,
+          ),
+          fullName: reference.sourceResource.project.fullName,
+        },
         sourceUrl: reference.sourceResource.sourceUrl,
-        targetProject: reference.targetResource?.project ?? null,
+        targetProject: reference.targetResource?.project
+          ? {
+              githubId: safeGithubId(
+                (
+                  reference.targetResource.project as {
+                    githubId?: unknown;
+                  }
+                )?.githubId,
+              ),
+              fullName: reference.targetResource.project.fullName,
+            }
+          : null,
         targetUrl: reference.targetUrl,
         targetExternalId: reference.targetExternalId,
         targetSourceType: reference.targetSourceType,

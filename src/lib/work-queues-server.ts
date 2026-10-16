@@ -57,6 +57,11 @@ type ResourceRow = {
   }>;
 };
 
+// OWNER FLAG (finding X): `isOpenState` counts branch/commit `present`
+// and deployment `success`/`unknown` as open work, which inflates
+// active/recent/stale/ready windows. Whether successful deployments or
+// present branches count as actionable work is a product definition —
+// NOT redefined here by design; owner to rule.
 function isOpenState(state: string): boolean {
   const normalized = state.toLowerCase();
   return normalized !== "closed" && normalized !== "merged" && normalized !== "completed";
@@ -79,17 +84,30 @@ function toQueueEntry(row: ResourceRow): QueueEntry {
   };
 }
 
+// Finding X (queue-correctness, small parts only): scan every explicit
+// target and prefer blocking/closing intent over a plain reference, so a
+// neutral open link earlier in unspecified ordering cannot hide a later
+// explicit blocker. `isOpenState` itself is an OWNER product call — flagged,
+// NOT redefined here.
 function explicitOpenTarget(row: ResourceRow): ResourceRow["references"][number] | null {
+  let fallback: ResourceRow["references"][number] | null = null;
   for (const reference of row.references) {
     if (reference.relationshipType !== "explicit") continue;
     if (reference.evidence !== "source_url") continue;
     const target = reference.targetResource;
     if (!target) continue;
     if (isOpenState(target.sourceState) && !target.sourceClosedAt) {
-      return reference;
+      if (
+        reference.intent === "blocking" ||
+        reference.intent === "closing" ||
+        reference.intent === "blocks"
+      ) {
+        return reference;
+      }
+      fallback ??= reference;
     }
   }
-  return null;
+  return fallback;
 }
 
 function hasMentionOnlyBlockerIntent(row: ResourceRow): boolean {
@@ -159,8 +177,12 @@ export async function loadWorkQueues(
     return null;
   }
 
+  // Finding N: tombstoned rows (reconciled as vanished in a complete
+  // snapshot) are retained history, never queue members.
   const resources = (await db.workResource.findMany({
-    where: projectIds ? { projectId: { in: projectIds } } : {},
+    where: projectIds
+      ? { projectId: { in: projectIds }, sourceState: { not: "tombstoned" } }
+      : { sourceState: { not: "tombstoned" } },
     orderBy: [{ sourceUpdatedAt: "desc" }, { createdAt: "desc" }],
     include: {
       project: { select: { id: true, githubId: true, fullName: true } },
@@ -233,15 +255,33 @@ export async function loadWorkQueues(
     }
   }
 
-  // Deployment success by refName per project, for ready-to-land matching.
-  const successRefsByProject = new Map<string, Set<string>>();
+  // Deployment outcome by refName per project, for ready-to-land matching.
+  // Finding X: a newer failed deployment on a ref disqualifies ready even
+  // when an older success row exists — compare latest timestamps per ref.
+  const deployOutcomeByProjectRef = new Map<
+    string,
+    { state: string; at: number }
+  >();
   for (const row of resources) {
     if (row.sourceType !== "deployment") continue;
-    if (row.sourceState.toLowerCase() !== "success") continue;
     if (!row.refName) continue;
-    const refs = successRefsByProject.get(row.projectId) ?? new Set<string>();
-    refs.add(row.refName);
-    successRefsByProject.set(row.projectId, refs);
+    const at = row.sourceUpdatedAt ? row.sourceUpdatedAt.getTime() : 0;
+    const key = `${row.projectId}::${row.refName}`;
+    const prior = deployOutcomeByProjectRef.get(key);
+    if (!prior || at >= prior.at) {
+      deployOutcomeByProjectRef.set(key, {
+        state: row.sourceState.toLowerCase(),
+        at,
+      });
+    }
+  }
+  const successRefsByProject = new Map<string, Set<string>>();
+  for (const [key, outcome] of deployOutcomeByProjectRef) {
+    if (outcome.state !== "success") continue;
+    const [projectId, refName] = key.split("::");
+    const refs = successRefsByProject.get(projectId) ?? new Set<string>();
+    refs.add(refName);
+    successRefsByProject.set(projectId, refs);
   }
 
   for (const row of resources) {
@@ -249,10 +289,12 @@ export async function loadWorkQueues(
     const ageMs = updatedAt === null ? null : now - updatedAt;
     const open = isOpenState(row.sourceState) && !row.sourceClosedAt;
     const blockingTarget = explicitOpenTarget(row);
+    // Finding X: a `closing` reference (e.g. "Fixes #12") is not a blocker
+    // — only `blocking`/`blocks` intent puts the source in blocked. Closing
+    // intent still counts for attention via the explicit-link rule below.
     const blockingIntent =
       blockingTarget !== null &&
       (blockingTarget.intent === "blocking" ||
-        blockingTarget.intent === "closing" ||
         blockingTarget.intent === "blocks");
     const failedDeployment =
       row.sourceType === "deployment" &&
@@ -278,15 +320,26 @@ export async function loadWorkQueues(
       });
     }
 
-    // Blocked: explicit blocking link to an open target (never inferred).
+    // Blocked: explicit blocking link to an open target (never inferred,
+    // never closing intent).
     if (open && blockingIntent) {
       push("blocked", row);
     }
-    // Attention: explicit blockers or failed deployments.
-    if (blockingIntent || failedDeployment) {
+    // Attention: explicit blocking/closing links to an open target, or
+    // failed deployments. Closing intent lands here but not in blocked.
+    const attentionIntent =
+      blockingTarget !== null &&
+      (blockingTarget.intent === "blocking" ||
+        blockingTarget.intent === "blocks" ||
+        blockingTarget.intent === "closing");
+    if (attentionIntent || failedDeployment) {
       push("attention", row);
     }
     // Ready: open PR with a same-ref recorded deployment success.
+    // Finding X: per-ref latest-state check happens at read time — a newer
+    // failed deployment on the same ref disqualifies ready even when an
+    // older success row exists. Success rows older than any failure on the
+    // same ref are ignored.
     if (
       open &&
       row.sourceType === "pull_request" &&

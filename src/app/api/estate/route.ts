@@ -19,6 +19,9 @@ export async function GET() {
         },
       }),
       db.repositoryAnalysis.findMany({
+        // Finding J: newest-first so buildEstateCoverage's first-match-wins
+        // buckets pick the newest version deterministically.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: {
           id: true,
           projectId: true,
@@ -110,9 +113,19 @@ export async function GET() {
           const notCurrent = citedVersionIds.filter(
             (id) => !currentVersionIds.has(id),
           );
+          // Finding L (set-growth stale): a newly completed project grows
+          // the live constituent set without invalidating any old citation,
+          // so compare the full sets, not just old-citation disappearance.
+          const grown =
+            currentVersionIds.size > citedVersionIds.length &&
+            [...currentVersionIds].some((id) => !citedVersionIds.includes(id));
           if (notCurrent.length > 0) {
             staleReason = "cited_constituent_not_current";
             staleConstituentCount = notCurrent.length;
+          } else if (grown) {
+            staleReason = "constituent_set_grew";
+            staleConstituentCount =
+              currentVersionIds.size - citedVersionIds.length;
           }
         }
       }

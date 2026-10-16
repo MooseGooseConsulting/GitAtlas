@@ -87,6 +87,10 @@ interface CoverageAnalysisInput {
  * otherwise the newest failed row; otherwise any superseded completed/stale
  * row degrades to `stale_only`; otherwise `unattempted`. Archived projects
  * are counted separately and excluded from the per-project list.
+ *
+ * Determinism contract (finding J): callers must pass `analyses`
+ * newest-first (`orderBy` createdAt desc, id desc) because the winner of
+ * each bucket is the first matching row.
  */
 export function buildEstateCoverage(
   projects: CoverageProjectInput[],
@@ -247,6 +251,9 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
       },
     }),
     db.repositoryAnalysis.findMany({
+      // Finding J: newest-first so buildEstateCoverage's first-match-wins
+      // buckets are deterministic.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: {
         id: true,
         projectId: true,
@@ -262,9 +269,19 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
     .filter((entry) => entry.state === "completed" && entry.versionId)
     .map((entry) => entry.versionId as string);
 
+  // Finding L (rename-hash gap): the narrative prompt includes repository
+  // names, so a rename must change the hash even when the constituent set
+  // is identical. Include the completed constituents' fullNames.
+  const nameById = new Map(projects.map((p) => [p.id, p.fullName]));
+  const constituentNames = coverage.projects
+    .filter((entry) => entry.state === "completed" && entry.versionId)
+    .map((entry) => nameById.get(entry.projectId) ?? entry.projectId)
+    .sort();
+
   const inputHash = sha256({
     promptVersion: ESTATE_PROMPT_VERSION,
     versionIds: currentVersionIds,
+    names: constituentNames,
     counts: coverage.counts,
   });
 
@@ -283,8 +300,22 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
     const code =
       error instanceof FreeRouteError ? error.code : "free_model_unavailable";
     const retryAt = retryDate(code);
-    const estate = await db.estateAnalysis.create({
-      data: {
+    // Finding I: reuse the existing row for the same input hash instead of
+    // inserting a duplicate (inputHash is unique). History is preserved
+    // only when the hash changes.
+    const estate = await db.estateAnalysis.upsert({
+      where: { inputHash },
+      update: {
+        model: DEFAULT_FREE_OPENROUTER_MODEL,
+        analysisVersionIds: JSON.stringify(currentVersionIds),
+        coverageJson: JSON.stringify(coverage),
+        status: "pending",
+        errorCode: code,
+        retryAt,
+        resultJson: null,
+        completedAt: null,
+      },
+      create: {
         inputHash,
         promptVersion: ESTATE_PROMPT_VERSION,
         model: DEFAULT_FREE_OPENROUTER_MODEL,
@@ -303,10 +334,54 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
     };
   }
 
+  // Finding K: include bounded, attributed summaries/citations from the
+  // selected completed analyses so the model can summarize findings, not
+  // just names+IDs. Each line is capped (summary 500 chars) and citations
+  // below are still verified against current constituents.
+  const completedByVersionId = new Map(
+    (
+      (await db.repositoryAnalysis.findMany({
+        where: { id: { in: currentVersionIds.slice(0, ESTATE_PROJECT_LIMIT) } },
+        select: { id: true, resultJson: true },
+      })) as Array<{ id: string; resultJson: string | null }>
+    ).map((row) => [row.id, row.resultJson]),
+  );
+  function boundedSummary(resultJson: string | null | undefined): string {
+    if (!resultJson) return "";
+    try {
+      const parsed = JSON.parse(resultJson) as {
+        summary?: unknown;
+        citations?: unknown;
+      };
+      const parts: string[] = [];
+      if (typeof parsed.summary === "string" && parsed.summary.trim()) {
+        parts.push(
+          parsed.summary.trim().slice(0, 500).replace(/\s+/g, " "),
+        );
+      }
+      if (Array.isArray(parsed.citations)) {
+        const ids = (parsed.citations as Array<{ evidenceId?: unknown }>)
+          .map((c) => (typeof c?.evidenceId === "string" ? c.evidenceId : null))
+          .filter((id): id is string => id !== null)
+          .slice(0, 5);
+        if (ids.length > 0) parts.push(`cites: ${ids.join(", ")}`);
+      }
+      return parts.join(" | ").slice(0, 600);
+    } catch {
+      return "";
+    }
+  }
   const constituentLines = coverage.projects
     .filter((entry) => entry.state === "completed" && entry.versionId)
     .slice(0, ESTATE_PROJECT_LIMIT)
-    .map((entry) => `- ${entry.fullName} (analysis ${entry.versionId})`)
+    .map((entry) => {
+      const detail = boundedSummary(
+        completedByVersionId.get(entry.versionId as string),
+      );
+      return detail
+        ? `- ${entry.fullName} (analysis ${entry.versionId}): ${detail}`
+        : `- ${entry.fullName} (analysis ${entry.versionId})`;
+    })
     .join("\n");
 
   let raw: string;
@@ -342,8 +417,20 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
       error instanceof FreeRouteError ? error.code : "provider_failure";
     const quota = code === "free_quota_exhausted";
     const retryAt = retryDate(code);
-    const estate = await db.estateAnalysis.create({
-      data: {
+    // Finding I: reuse the existing row for the same input hash.
+    const estate = await db.estateAnalysis.upsert({
+      where: { inputHash },
+      update: {
+        model,
+        analysisVersionIds: JSON.stringify(currentVersionIds),
+        coverageJson: JSON.stringify(coverage),
+        status: quota ? "pending" : "failed",
+        errorCode: code,
+        retryAt,
+        resultJson: null,
+        completedAt: null,
+      },
+      create: {
         inputHash,
         promptVersion: ESTATE_PROMPT_VERSION,
         model,
@@ -365,10 +452,12 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
   // Citation verification (all-citations fix): keep only citations that are
   // still current constituents. A model-hallucinated or superseded ID is
   // dropped from the persisted narrative, never presented as evidence.
+  // Finding L (weak cast): require the promised shape — narrative string
+  // plus themes/uncertainties/citations arrays — before persisting completed.
   let resultJson: string | null = null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null) {
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       const current = new Set(currentVersionIds);
       const record = parsed as Record<string, unknown>;
       if (Array.isArray(record.citations)) {
@@ -377,17 +466,35 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
             typeof entry === "string" && current.has(entry),
         );
       }
-      resultJson = JSON.stringify(record);
+      const shapeOk =
+        typeof record.narrative === "string" &&
+        record.narrative.trim().length > 0 &&
+        Array.isArray(record.themes) &&
+        Array.isArray(record.uncertainties) &&
+        (record.citations === undefined || Array.isArray(record.citations));
+      resultJson = shapeOk ? JSON.stringify(record) : null;
     } else {
-      resultJson = raw;
+      resultJson = null;
     }
   } catch {
     resultJson = null;
   }
   if (!resultJson) {
     const retryAt = retryDate("provider_failure");
-    const estate = await db.estateAnalysis.create({
-      data: {
+    // Finding I: reuse the existing row for the same input hash.
+    const estate = await db.estateAnalysis.upsert({
+      where: { inputHash },
+      update: {
+        model,
+        analysisVersionIds: JSON.stringify(currentVersionIds),
+        coverageJson: JSON.stringify(coverage),
+        status: "failed",
+        errorCode: "provider_failure",
+        retryAt,
+        resultJson: null,
+        completedAt: null,
+      },
+      create: {
         inputHash,
         promptVersion: ESTATE_PROMPT_VERSION,
         model,
@@ -405,8 +512,20 @@ export async function runEstateSynthesis(): Promise<EstateSynthesisResult> {
       retryAt: retryAt.toISOString(),
     };
   }
-  const estate = await db.estateAnalysis.create({
-    data: {
+  // Finding I: reuse the existing row for the same input hash.
+  const estate = await db.estateAnalysis.upsert({
+    where: { inputHash },
+    update: {
+      model,
+      analysisVersionIds: JSON.stringify(currentVersionIds),
+      coverageJson: JSON.stringify(coverage),
+      resultJson,
+      status: "completed",
+      errorCode: null,
+      retryAt: null,
+      completedAt: now,
+    },
+    create: {
       inputHash,
       promptVersion: ESTATE_PROMPT_VERSION,
       model,

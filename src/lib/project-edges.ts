@@ -112,11 +112,22 @@ export async function refreshHeuristicProjectEdges(): Promise<{
     }
   }
 
+  // Finding Z (scoping, not perf): the project scan is capped at 500 but
+  // the delete above used to wipe the whole heuristic tier, removing edges
+  // for projects outside the window on every refresh. Scope the delete to
+  // the scanned project set so out-of-window edges survive. (Batching the
+  // per-row creates is a deferred perf follow-up.)
+  const scannedIds = projects.map((project) => project.id);
+
   await db.$transaction(async (tx) => {
     await tx.projectEdge.deleteMany({
       where: {
         category: HEURISTIC_CATEGORY,
         confidence: HEURISTIC_CONFIDENCE,
+        OR: [
+          { sourceProjectId: { in: scannedIds } },
+          { targetProjectId: { in: scannedIds } },
+        ],
       },
     });
     for (const write of writes) {

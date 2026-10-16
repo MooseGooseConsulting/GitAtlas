@@ -26,29 +26,39 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const project = await db.project.findUnique({
-    where: { id: body.projectId },
-    select: { id: true },
-  });
-  if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  // Finding U: wrap DB work in try/catch so an outage returns the
+  // repo-standard sanitized JSON 503 (like every sibling read route) instead
+  // of an unhandled framework 500 that risks leaking Prisma text.
+  try {
+    const project = await db.project.findUnique({
+      where: { id: body.projectId },
+      select: { id: true },
+    });
+    if (!project) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+    const note = await db.ownerNote.create({
+      data: {
+        projectId: project.id,
+        author:
+          typeof body.author === "string" ? body.author.trim() : "operator",
+        provenance: "owner",
+        note: body.note.trim(),
+      },
+      select: {
+        id: true,
+        projectId: true,
+        author: true,
+        provenance: true,
+        note: true,
+        createdAt: true,
+      },
+    });
+    return NextResponse.json({ note }, { status: 201 });
+  } catch {
+    return NextResponse.json(
+      { error: "Analysis notes are temporarily unavailable." },
+      { status: 503 },
+    );
   }
-  const note = await db.ownerNote.create({
-    data: {
-      projectId: project.id,
-      author:
-        typeof body.author === "string" ? body.author.trim() : "operator",
-      provenance: "owner",
-      note: body.note.trim(),
-    },
-    select: {
-      id: true,
-      projectId: true,
-      author: true,
-      provenance: true,
-      note: true,
-      createdAt: true,
-    },
-  });
-  return NextResponse.json({ note }, { status: 201 });
 }

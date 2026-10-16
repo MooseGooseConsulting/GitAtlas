@@ -210,17 +210,26 @@ function toResource(type: ResourceType, obj: GitHubObject, project: ProjectRef):
  * issue/PR. Only explicit same-repository URLs and #number text are retained.
  * Intent verbs (closing/blocking) are recorded as evidence metadata; a
  * mention or closing phrase never changes the referenced object's state.
+ *
+ * Finding AC: contributor text is untrusted and unbounded. Cap the scanned
+ * input (length) and the emitted reference count so a large body cannot
+ * generate excessive scans or database writes during work sync.
  */
+export const MAX_REFERENCE_TEXT_CHARS = 20_000;
+export const MAX_REFERENCES_PER_ITEM = 50;
+
 export function extractWorkReferences(
   text: string | null | undefined,
   owner: string,
   repo: string,
 ): WorkReferenceInput[] {
   if (!text) return [];
+  const bounded = text.slice(0, MAX_REFERENCE_TEXT_CHARS);
   const output = new Map<string, WorkReferenceInput>();
   const prefix = `https://github.com/${owner}/${repo}/`;
   const explicit = /https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(issues|pull)\/(\d+)/gi;
-  for (const match of text.matchAll(explicit)) {
+  for (const match of bounded.matchAll(explicit)) {
+    if (output.size >= MAX_REFERENCES_PER_ITEM) break;
     if (match[1].toLowerCase() !== owner.toLowerCase() || match[2].toLowerCase() !== repo.toLowerCase()) continue;
     const number = Number(match[4]);
     output.set(`explicit:${number}`, {
@@ -229,11 +238,12 @@ export function extractWorkReferences(
       targetUrl: `${prefix}${match[3]}/${number}`,
       relationshipType: "explicit",
       evidence: "source_url",
-      intent: detectReferenceIntent(text, match.index ?? 0),
+      intent: detectReferenceIntent(bounded, match.index ?? 0),
     });
   }
   const mentions = /(?:^|[^\w])#(\d+)\b/g;
-  for (const match of text.matchAll(mentions)) {
+  for (const match of bounded.matchAll(mentions)) {
+    if (output.size >= MAX_REFERENCES_PER_ITEM) break;
     const number = Number(match[1]);
     if (!output.has(`explicit:${number}`)) {
       const hashOffset = (match.index ?? 0) + match[0].indexOf("#");
@@ -243,7 +253,7 @@ export function extractWorkReferences(
         targetUrl: null,
         relationshipType: "inferred",
         evidence: "text_mention",
-        intent: detectReferenceIntent(text, hashOffset),
+        intent: detectReferenceIntent(bounded, hashOffset),
       });
     }
   }
@@ -257,12 +267,22 @@ function resourceScope(project: Pick<ProjectRef, "githubId">, type: ResourceType
 /**
  * Persist fetched items and their references. Extracted so partial page results
  * can be stored before a later page fails.
+ *
+ * `completeSnapshot` must be true only when `items` is the full successful
+ * collection result; tombstoning (finding N) then reconciles vanished rows.
+ * Partial/deferred callers leave it false so old rows are retained.
+ *
+ * Removed references that disappeared from source text are deleted per
+ * source item (finding N, second half): the transaction upserts currently
+ * found references and deletes that source's references absent from this
+ * snapshot. Complete-snapshot-only, like resource tombstoning.
  */
 async function persistFetchedItems(
   project: ProjectRef,
   type: ResourceType,
   items: GitHubObject[],
   fetchedAt: Date,
+  completeSnapshot = false,
 ) {
   const selectedItems = items.filter(
     (item) => type !== "issue" || !item.pull_request,
@@ -282,7 +302,26 @@ async function persistFetchedItems(
     if (refs.length) references.set(resource.externalId, refs);
   }
 
+  // Finding N (tombstone, complete-snapshot only): callers pass
+  // `completeSnapshot` true only after a fully successful collection fetch.
+  // Vanished rows from a complete snapshot are marked stale (sourceState
+  // `tombstoned`) so queues stop presenting them; partial/deferred fetches
+  // never tombstone.
   await db.$transaction(async (tx) => {
+    const seenExternalIds = new Set(
+      resources.map((resource) => resource.externalId),
+    );
+    if (completeSnapshot && typeof tx.workResource.updateMany === "function") {
+      await tx.workResource.updateMany({
+        where: {
+          projectId: project.id,
+          sourceType: type,
+          externalId: { notIn: [...seenExternalIds] },
+          sourceState: { not: "tombstoned" },
+        },
+        data: { sourceState: "tombstoned", lastSeenAt: fetchedAt },
+      });
+    }
     for (const resource of resources) {
       await tx.workResource.upsert({
         where: {
@@ -340,6 +379,9 @@ async function persistFetchedItems(
         byNumber.set(row.issueNumber, matching);
       }
     }
+    // Track each source's currently-found reference keys so snapshots that
+    // removed a link can delete the stale WorkReference rows (finding N).
+    const foundKeysBySource = new Map<string, Set<string>>();
     for (const [sourceExternalId, sourceReferences] of references) {
       const source = await tx.workResource.findUnique({
         where: {
@@ -352,6 +394,8 @@ async function persistFetchedItems(
         select: { id: true },
       });
       if (!source) continue;
+      const foundKeys = new Set<string>();
+      foundKeysBySource.set(sourceExternalId, foundKeys);
       for (const reference of sourceReferences) {
         const candidates = byNumber.get(reference.targetNumber) ?? [];
         const referenceKey = reference.targetSourceType
@@ -367,6 +411,7 @@ async function persistFetchedItems(
               ? candidates[0]
               : undefined;
         const classification = classifyReference(reference);
+        foundKeys.add(`${reference.relationshipType}:${referenceKey}`);
         await tx.workReference.upsert({
           where: {
             sourceResourceId_targetExternalId_relationshipType: {
@@ -397,6 +442,65 @@ async function persistFetchedItems(
             confidence: classification.confidence,
             intent: reference.intent,
           },
+        });
+      }
+      // Finding N: when the caller certifies a complete snapshot, delete
+      // this source's references that disappeared from its text. Sources
+      // absent from `references` had zero refs; their stale rows are handled
+      // by the resource-level reconciliation when the whole item vanished,
+      // and per-source zero-ref cleanup below. Guarded for minimal tx
+      // doubles (tests) that only implement upsert/findUnique.
+      if (
+        completeSnapshot &&
+        typeof tx.workReference.findMany === "function" &&
+        typeof tx.workReference.delete === "function"
+      ) {
+        const source = await tx.workResource.findUnique({
+          where: {
+            projectId_sourceType_externalId: {
+              projectId: project.id,
+              sourceType: type,
+              externalId: sourceExternalId,
+            },
+          },
+          select: { id: true },
+        });
+        if (source) {
+          const found = foundKeysBySource.get(sourceExternalId) ?? new Set();
+          const existing = await tx.workReference.findMany({
+            where: { sourceResourceId: source.id },
+            select: { id: true, targetExternalId: true, relationshipType: true },
+          });
+          for (const row of existing) {
+            if (!found.has(`${row.relationshipType}:${row.targetExternalId}`)) {
+              await tx.workReference.delete({ where: { id: row.id } });
+            }
+          }
+        }
+      }
+    }
+    // Sources with zero refs in this complete snapshot: their prior
+    // references (if any) are stale.
+    if (
+      completeSnapshot &&
+      typeof tx.workReference.deleteMany === "function"
+    ) {
+      const withRefs = new Set(references.keys());
+      for (const resource of resources) {
+        if (withRefs.has(resource.externalId)) continue;
+        const source = await tx.workResource.findUnique({
+          where: {
+            projectId_sourceType_externalId: {
+              projectId: project.id,
+              sourceType: type,
+              externalId: resource.externalId,
+            },
+          },
+          select: { id: true },
+        });
+        if (!source) continue;
+        await tx.workReference.deleteMany({
+          where: { sourceResourceId: source.id },
         });
       }
     }
@@ -516,7 +620,22 @@ async function syncCollection(
     return { count: 0, pages: 0, unsupported: true };
   }
 
+  // Finding O: a failed deployment-status read must not clear the last
+  // known success. Track failures; on any non-rate-limit failure preserve
+  // prior deployment state (pass the previous status through) and mark the
+  // scope partial instead of current.
+  let deploymentStatusIncomplete = false;
   if (type === "deployment") {
+    // Snapshot prior deployment states so a failed status read can restore
+    // them instead of overwriting with unknown.
+    const priorDeployments =
+      await db.workResource.findMany({
+        where: { projectId: project.id, sourceType: "deployment" },
+        select: { externalId: true, sourceState: true },
+      });
+    const priorStateByExternalId = new Map(
+      priorDeployments.map((row) => [row.externalId, row.sourceState]),
+    );
     for (const deployment of result.items) {
       if (typeof deployment.id !== "number") continue;
       try {
@@ -550,17 +669,42 @@ async function syncCollection(
           });
           throw failure;
         }
-        deployment.latest_status = undefined;
+        // Preserve the last known state; only fall back to unknown when the
+        // provider actually reported unavailable (null) or no prior exists.
+        deploymentStatusIncomplete = true;
+        const externalId = String(deployment.id);
+        const prior = priorStateByExternalId.get(externalId);
+        deployment.latest_status = prior
+          ? { state: prior, created_at: deployment.updated_at ?? null }
+          : undefined;
       }
     }
   }
 
+  // Finding N: this is the complete-snapshot path — the whole collection
+  // fetched successfully — so tombstone vanished rows.
   const resourceCount = await persistFetchedItems(
     project,
     type,
     result.items,
     fetchedAt,
+    true,
   );
+  if (deploymentStatusIncomplete) {
+    const priorScope = await db.syncState.findUnique({
+      where: { scope: resourceScope(project, type) },
+      select: { lastSuccessAt: true, itemCount: true },
+    });
+    await writeScope(resourceScope(project, type), {
+      status: "partial",
+      fetchedAt,
+      lastSuccessAt: priorScope?.lastSuccessAt ?? fetchedAt,
+      itemCount: resourceCount,
+      pagesFetched: result.pagesFetched,
+      errorCode: "deployment_status_incomplete",
+    });
+    return { count: resourceCount, pages: result.pagesFetched, unsupported: false };
+  }
   await writeScope(resourceScope(project, type), {
     status: "current",
     fetchedAt,

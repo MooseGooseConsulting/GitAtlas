@@ -23,6 +23,25 @@ const SAFE_FAILURE_CODES = new Set([
   "invalid_provider_response",
 ]);
 
+// Finding C-cap: bound the unauthenticated bulk read. Without a ?project
+// filter the query below would dump the whole workResource table plus its
+// references include. Keep the auth-model decision with the owner; just cap
+// it. TODO(threat-model): owner to decide unauth corpus reads vs auth gate.
+const WORK_RESOURCES_READ_LIMIT = 500;
+
+// Finding M: Prisma BigInt githubId cannot be JSON-serialized; convert with
+// the Number() pattern used by github/projects (safe integer, else string).
+function toSafeGithubId(value: unknown): number | string | null {
+  if (typeof value === "bigint") {
+    const asNumber = Number(value);
+    return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+  }
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) ? value : String(value);
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const projectGithubId = Number(request.nextUrl.searchParams.get("project"));
@@ -41,7 +60,7 @@ export async function GET(request: NextRequest) {
     if (request.nextUrl.searchParams.has("project") && !project) {
       return NextResponse.json({ error: "Project not found." }, { status: 404 });
     }
-    const resources = await db.workResource.findMany({
+    const rawResources = await db.workResource.findMany({
       where: {
         ...(project ? { projectId: project.id } : {}),
         ...(WORK_TYPES.includes(sourceType as (typeof WORK_TYPES)[number])
@@ -49,6 +68,7 @@ export async function GET(request: NextRequest) {
           : {}),
       },
       orderBy: [{ sourceUpdatedAt: "desc" }, { createdAt: "desc" }],
+      take: WORK_RESOURCES_READ_LIMIT,
       include: {
         project: { select: { githubId: true, fullName: true } },
         references: {
@@ -62,12 +82,28 @@ export async function GET(request: NextRequest) {
         },
       },
     });
-    const states = project
+    const resources = rawResources.map((resource) => ({
+      ...resource,
+      project: {
+        fullName:
+          (resource as { project?: { fullName?: unknown } }).project
+            ?.fullName ?? "unknown",
+        githubId: toSafeGithubId(
+          (resource as { project?: { githubId?: unknown } }).project?.githubId,
+        ),
+      },
+    }));
+    // Finding M: Prisma returns githubId as BigInt on PG but ProjectRef
+    // wants number — convert at the boundary (in-scope: owned route file).
+    const projectRef = project
+      ? { ...project, githubId: Number(project.githubId) }
+      : null;
+    const states = projectRef
       ? await Promise.all(
           ([...WORK_TYPES, "services", "agents"] as const).map((type) =>
             db.syncState.findUnique({
               where: {
-                scope: getWorkResourceScope(project, type),
+                scope: getWorkResourceScope(projectRef, type),
               },
               select: {
                 scope: true,
@@ -90,7 +126,7 @@ export async function GET(request: NextRequest) {
         ...state,
         status:
           state.status === "current" &&
-          (project?.inventoryStatus !== "current" ||
+          (projectRef?.inventoryStatus !== "current" ||
             (state.lastSuccessAt !== null &&
               Date.now() - state.lastSuccessAt.getTime() >
                 6 * 60 * 60 * 1000))
@@ -144,7 +180,12 @@ export async function POST(request: NextRequest) {
       // These sources have no supported GitHub API in the current snapshotter.
       unsupportedScopes += 2;
       try {
-        const result = await syncProjectWorkResources(project);
+        // Finding M: convert Prisma BigInt githubId to number at the
+        // boundary before passing to ProjectRef-typed sync.
+        const result = await syncProjectWorkResources({
+          ...project,
+          githubId: Number(project.githubId),
+        });
         syncedProjects++;
         for (const value of Object.values(result)) {
           resources += value.count;

@@ -201,8 +201,11 @@ export async function chatWithFreeModel(
   }
   const apiKey = process.env.OPENROUTER_API_KEY ?? "";
   if (!apiKey) {
+    // Missing configuration is not quota exhaustion: waiting cannot restore
+    // a key, so report a distinct code that callers persist as failed work
+    // (with the standard retryAt) instead of pending quota work.
     throw new FreeRouteError(
-      "free_quota_exhausted",
+      "missing_config",
       "OPENROUTER_API_KEY is not configured",
     );
   }
@@ -231,10 +234,15 @@ export async function chatWithFreeModel(
   }
   if (response.status === 429 || response.status === 402) {
     const retryAfter = response.headers.get("retry-after");
-    const seconds = Number(retryAfter);
-    const retryAt = Number.isFinite(seconds)
-      ? new Date(Date.now() + seconds * 1000).toISOString()
-      : undefined;
+    // Number(null) is 0, which would schedule an immediate retry against an
+    // exhausted quota. Only honor an explicit, finite, non-negative header;
+    // otherwise leave retryAt undefined so callers apply their quota backoff.
+    const parsed =
+      retryAfter === null ? NaN : Number(retryAfter);
+    const retryAt =
+      Number.isFinite(parsed) && parsed >= 0
+        ? new Date(Date.now() + parsed * 1000).toISOString()
+        : undefined;
     throw new FreeRouteError(
       "free_quota_exhausted",
       `Free model quota exhausted (${response.status})`,

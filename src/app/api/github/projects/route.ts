@@ -1,12 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
+function toSafeGithubId(value: unknown): number | string | null {
+  // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot serialize
+  // bigint. Guard with Number.isSafeInteger and fall back to string (M).
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+  }
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? value : String(value);
+  }
+  return null;
+}
+
 function parseDeepFields(p: any) {
   return {
     ...p,
-    // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot serialize
-    // bigint, so convert at the API boundary (safe: GitHub IDs fit in double).
-    githubId: Number(p.githubId),
+    githubId: toSafeGithubId(p.githubId),
     topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
     tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
     fileTree: p.fileTree ? (typeof p.fileTree === 'string' ? JSON.parse(p.fileTree) : p.fileTree) : null,
@@ -17,6 +28,12 @@ function parseDeepFields(p: any) {
   };
 }
 
+// Safe-default read cap for this portfolio-adjacent unauthenticated read.
+// TODO(threat-model): owner to decide whether `username=all` full-corpus
+// reads stay; until then keep the corpus read bounded and default
+// single-user scoped.
+const PROJECTS_READ_LIMIT = 500;
+
 export async function GET(request: NextRequest) {
   try {
     const username = request.nextUrl.searchParams.get('username');
@@ -24,8 +41,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'username is required' }, { status: 400 });
     }
 
-    // Why "all": the portfolio-first landing reads the whole persisted corpus
-    // (every accessible owner), not just one owner's repositories.
+    // Intent: DB-backed persisted corpus read. `username=all` exists for the
+    // portfolio-first landing; single-user values scope to one ownerLogin.
+    // Bounded by PROJECTS_READ_LIMIT as a safe default (findings B/D).
     const projects = await db.project.findMany({
       where: username === 'all'
         ? {}
@@ -35,6 +53,7 @@ export async function GET(request: NextRequest) {
             ],
           },
       orderBy: { githubUpdatedAt: 'desc' },
+      take: PROJECTS_READ_LIMIT,
     });
 
     const analysisJob = await db.analysisJob.findFirst({

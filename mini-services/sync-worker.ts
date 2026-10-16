@@ -21,6 +21,11 @@ const BASE_URL = process.env.SYNC_BASE_URL || 'http://localhost:3000';
 const USERNAME = process.env.SYNC_USERNAME || 'Coldaine';
 const REFRESH_INTERVAL = Number(process.env.SYNC_REFRESH_INTERVAL || 900); // 15 min
 const ENRICH_INTERVAL = Number(process.env.SYNC_ENRICH_INTERVAL || 60); // 1 min
+// Worker-side wiring for the internal token gate (finding AF, blocked-on-A).
+// Deploy sets GITATLAS_INTERNAL_SYNC_TOKEN alongside the app; the worker sends
+// it as Authorization: Bearer on every callJson POST. Missing token surfaces
+// as a 401 from the server (gates kept by design) rather than silent success.
+const INTERNAL_TOKEN = process.env.GITATLAS_INTERNAL_SYNC_TOKEN || '';
 
 function ts() {
   return new Date().toISOString();
@@ -30,7 +35,10 @@ async function callJson(path: string, body: unknown) {
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(INTERNAL_TOKEN ? { Authorization: `Bearer ${INTERNAL_TOKEN}` } : {}),
+    },
     body: JSON.stringify(body),
   });
   const text = await res.text();

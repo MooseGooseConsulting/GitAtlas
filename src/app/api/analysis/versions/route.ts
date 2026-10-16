@@ -55,9 +55,22 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Finding M: Prisma BigInt githubId cannot be JSON-serialized; convert
+    // with the Number() pattern used by github/projects (safe integer,
+    // else string) so valid lookups do not 503.
+    const githubId =
+      typeof project.githubId === "bigint"
+        ? (() => {
+            const asNumber = Number(project.githubId);
+            return Number.isSafeInteger(asNumber)
+              ? asNumber
+              : project.githubId.toString();
+          })()
+        : project.githubId;
+
     return NextResponse.json({
       project: {
-        githubId: project.githubId,
+        githubId,
         fullName: project.fullName,
         defaultBranch: project.defaultBranch,
         headSha: project.defaultBranchHeadSha,

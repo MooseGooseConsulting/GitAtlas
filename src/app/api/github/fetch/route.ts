@@ -3,17 +3,39 @@ import { db } from "@/lib/db";
 import { refreshAccessibleInventory } from "@/lib/github-inventory-sync";
 import { isInternalRequestAuthorized } from "@/lib/internal-sync-auth";
 
+// Safe default cap for the DB-backed corpus read below. The inventory itself
+// is full-accessible-scope by design; this cap only bounds the response.
+// TODO(threat-model): owner to decide single-user default vs full-corpus
+// read; keep capped until that decision lands.
+const FETCH_PROJECTS_LIMIT = 500;
+
+function toSafeGithubId(value: unknown): number | string | null {
+  if (typeof value === "bigint") {
+    const asNumber = Number(value);
+    return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+  }
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) ? value : String(value);
+  }
+  return null;
+}
+
 export async function POST(request: NextRequest) {
+  // KEEP: internal token gate. UI (page.tsx) and sync-worker send
+  // Authorization: Bearer <GITATLAS_INTERNAL_SYNC_TOKEN>; unauth callers get
+  // 401 by design. Do not remove this gate (finding A).
   if (!isInternalRequestAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const body = await request.json().catch(() => ({}));
-    const username =
+    const rawUsername =
       typeof body.username === "string" && body.username.trim()
         ? body.username.trim()
         : "accessible-token";
+    // Bound caller-controlled job label (matches sync/enrich-next pattern).
+    const username = rawUsername.slice(0, 100);
     const inventory = await refreshAccessibleInventory();
     const job = await db.analysisJob.create({
       data: {
@@ -25,46 +47,21 @@ export async function POST(request: NextRequest) {
     });
     const projects = await db.project.findMany({
       orderBy: { githubUpdatedAt: "desc" },
+      take: FETCH_PROJECTS_LIMIT,
     });
 
     return NextResponse.json({
       jobId: job.id,
       totalRepos: inventory.itemCount,
       inventory,
-      projects: projects.map(p => {
-        // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot
-        // serialize bigint, so convert at the API boundary. Guard against
-        // precision loss for values above Number.MAX_SAFE_INTEGER.
-        const githubIdNumber = Number(p.githubId);
-        if (!Number.isSafeInteger(githubIdNumber)) {
-          throw new Error(
-            `githubId ${p.githubId.toString()} for project ${p.id} exceeds Number.MAX_SAFE_INTEGER; refusing lossy conversion.`
-          );
-        }
-        // Deep-analysis columns are persisted as JSON strings; parse them
-        // back to structured values at the API boundary. Malformed payloads
-        // fall back to null rather than failing the whole response.
-        const parseJsonField = (value: unknown) => {
-          if (value == null) return null;
-          if (typeof value !== 'string') return value;
-          try {
-            return JSON.parse(value);
-          } catch {
-            return null;
-          }
-        };
-        return {
-          ...p,
-          githubId: githubIdNumber,
-          topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
-          tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
-          fileTree: parseJsonField(p.fileTree),
-          dependencies: parseJsonField(p.dependencies),
-          keyFiles: parseJsonField(p.keyFiles),
-          similarProjects: parseJsonField(p.similarProjects),
-          codeSignature: parseJsonField(p.codeSignature),
-        };
-      }),
+      projects: projects.map((project) => ({
+        ...project,
+        githubId: toSafeGithubId(
+          (project as unknown as { githubId?: unknown }).githubId,
+        ),
+        topics: project.topics ? project.topics.split(",").filter(Boolean) : [],
+        tags: project.tags ? project.tags.split(",").filter(Boolean) : [],
+      })),
     });
   } catch (error) {
     if (error instanceof Error && "status" in error) {
