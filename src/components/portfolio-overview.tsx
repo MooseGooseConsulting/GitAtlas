@@ -6,7 +6,7 @@
 // before any repository is selected. Read-only: it never calls protected
 // import/sync/analyze endpoints, so no internal bearer token is needed here.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtlasStore } from '@/lib/store';
 import { Project } from '@/lib/types';
 import type { PortfolioSummary, PortfolioStatusFilter } from '@/lib/portfolio-view';
@@ -165,8 +165,11 @@ export function PortfolioOverview() {
 
   // If onboarding just loaded a non-empty persisted corpus, re-check the
   // summary so the landing replaces the empty-corpus state with real counts.
+  // Guard against the mount double-fetch: skip when the corpus was already
+  // non-empty at mount (the unconditional effect above covered it).
+  const initialProjectCount = useRef(projects.length);
   useEffect(() => {
-    if (projects.length > 0) loadOverview();
+    if (projects.length > 0 && initialProjectCount.current === 0) loadOverview();
   }, [projects.length, loadOverview]);
 
   const filteredProjects = useMemo(
@@ -424,7 +427,7 @@ export function PortfolioOverview() {
               ) : (
                 <div className="mt-2 space-y-0.5">
                   {narrowedUncertain.slice(0, 3).map((entry) => (
-                    <div key={entry.resourceId} className="text-[10px] text-muted-foreground/70 truncate">
+                    <div key={`${entry.resourceId}:${entry.reason}`} className="text-[10px] text-muted-foreground/70 truncate">
                       <span className="text-foreground/70">{entry.projectFullName}</span> ·{' '}
                       {entry.reason.replace(/_/g, ' ')} — {entry.detail}
                     </div>
