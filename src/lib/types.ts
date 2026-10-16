@@ -21,6 +21,7 @@ export interface Project {
   ownerAvatarUrl: string | null;
   defaultBranch: string;
   visibility: string;
+  inventoryStatus?: string | null;
   summary: string | null;
   tags: string[];
   category: string | null;
@@ -55,7 +56,25 @@ export interface AnalysisJob {
   updatedAt: string;
 }
 
-export type ViewMode = 'graph' | 'grid' | 'timeline' | 'stats' | 'network' | 'radar' | 'bookmarks' | 'relationships' | 'health';
+export type ViewMode = 'graph' | 'grid' | 'timeline' | 'stats' | 'network' | 'radar' | 'bookmarks' | 'relationships' | 'health' | 'portfolio';
+
+// Why here and not in portfolio-view.ts: the Zustand store (lib/store.ts)
+// and cockpit-dashboard.tsx both consume this filter, while the
+// portfolio-view/work-queues libs are implemented in parallel. Keeping the
+// union in the shared types module avoids a store → missing-lib import edge;
+// portfolio-view.ts may re-export it once it lands (single source of truth).
+export type PortfolioStatusFilter =
+  | 'all'
+  | 'attention'
+  | 'active'
+  | 'recent'
+  | 'blocked'
+  | 'ready'
+  | 'stale'
+  | 'uncertain'
+  | 'unverified'
+  | 'archived'
+  | 'private';
 
 export type GraphLayout = 'force' | 'radial' | 'circular' | 'hierarchical' | 'grid' | 'spiral';
 
