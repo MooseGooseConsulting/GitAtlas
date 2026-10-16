@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Project, AnalysisJob, ViewMode, GraphLayout, NodeSizeBy, ColorBy } from './types';
+import { Project, AnalysisJob, ViewMode, GraphLayout, NodeSizeBy, ColorBy, PortfolioStatusFilter } from './types';
 
 interface AtlasState {
   username: string;
@@ -63,6 +63,12 @@ interface AtlasState {
   // Concept group filters
   activeConceptGroups: string[];
 
+  // Why in the shared store: both the cockpit search input and the
+  // portfolio-overview panel (implemented in parallel) read/write the same
+  // filter so work-queue cards and the repository list narrow together
+  // (VAL-UI-006). Additive slice — no existing state touched.
+  portfolioStatusFilter: PortfolioStatusFilter;
+
   // Setters
   setUsername: (u: string) => void;
   setProjects: (p: Project[]) => void;
@@ -111,6 +117,9 @@ interface AtlasState {
   // Concept group setters
   toggleConceptGroup: (g: string) => void;
   setActiveConceptGroups: (g: string[]) => void;
+
+  // Portfolio filter setter (see field doc above)
+  setPortfolioStatusFilter: (f: PortfolioStatusFilter) => void;
 }
 
 export const useAtlasStore = create<AtlasState>((set) => ({
@@ -165,6 +174,8 @@ export const useAtlasStore = create<AtlasState>((set) => ({
 
   // Concept group defaults
   activeConceptGroups: [],
+
+  portfolioStatusFilter: 'all',
 
   setUsername: (u) => set({ username: u }),
   setProjects: (p) => set({ projects: p }),
@@ -255,4 +266,5 @@ export const useAtlasStore = create<AtlasState>((set) => ({
         : [...state.activeConceptGroups, g],
     })),
   setActiveConceptGroups: (g) => set({ activeConceptGroups: g }),
+  setPortfolioStatusFilter: (f) => set({ portfolioStatusFilter: f }),
 }));
