@@ -23,11 +23,11 @@ services:
     port: 5432
     depends_on: []
   web:
-    start: (PORT=3100 exec ./node_modules/.bin/next dev -p 3100) & echo $! > /home/factory-user/.factory/missions/3341240b-eace-4c9c-9ae6-82fdd43008e3/web.pid; wait
+    start: mkdir -p tmp && (PORT=3100 exec ./node_modules/.bin/next dev -p 3100) & echo $! > tmp/web.pid; wait
     # The recorded PID is the launcher subshell; the actual next dev and its
     # next-server child are its children, so the child chain must be killed too
     # (verified 2026-10-12: killing only the recorded PID left port 3100 up).
-    stop: "if [ -f /home/factory-user/.factory/missions/3341240b-eace-4c9c-9ae6-82fdd43008e3/web.pid ]; then P=$(cat /home/factory-user/.factory/missions/3341240b-eace-4c9c-9ae6-82fdd43008e3/web.pid); C=$(pgrep -P \"$P\" 2>/dev/null); G=$(pgrep -P \"$C\" 2>/dev/null); kill $P $C $G 2>/dev/null; fi"
+    stop: "if [ -f tmp/web.pid ]; then P=$(cat tmp/web.pid); C=$(pgrep -P \"$P\" 2>/dev/null); G=$(pgrep -P \"$C\" 2>/dev/null); kill $P $C $G 2>/dev/null; fi"
     # Root is an initial process probe; the image/health feature replaces it with DB-aware /healthz.
     healthcheck: curl -sf http://127.0.0.1:3100/
     port: 3100

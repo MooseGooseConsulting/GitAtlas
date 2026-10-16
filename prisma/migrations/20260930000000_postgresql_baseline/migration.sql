@@ -4,7 +4,7 @@ CREATE SCHEMA IF NOT EXISTS "public";
 
 CREATE TABLE "Project" (
     "id" TEXT NOT NULL,
-    "githubId" INTEGER NOT NULL,
+    "githubId" BIGINT NOT NULL,
     "name" TEXT NOT NULL,
     "fullName" TEXT NOT NULL,
     "description" TEXT,

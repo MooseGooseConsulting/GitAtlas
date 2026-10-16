@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
-import { resolveDatabaseUrl } from "../src/lib/database-url";
+import { resolveDatabaseUrl } from "./database-url-resolve";
 
 async function runCommand(command: string[], databaseUrl: string) {
   const child = Bun.spawn(command, {

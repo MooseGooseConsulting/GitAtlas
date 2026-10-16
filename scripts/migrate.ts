@@ -1,4 +1,4 @@
-import { resolveDatabaseUrl } from '../src/lib/database-url';
+import { resolveDatabaseUrl } from './database-url-resolve';
 
 async function main() {
   const child = Bun.spawn([process.execPath, 'x', 'prisma', 'migrate', 'deploy'], {

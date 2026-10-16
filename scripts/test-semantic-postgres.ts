@@ -1,5 +1,8 @@
 import { randomInt } from "node:crypto";
-import { db } from "../src/lib/db";
+import { PrismaClient } from "@prisma/client";
+import { resolveDatabaseUrl } from "./database-url-resolve";
+
+const db = new PrismaClient({ datasourceUrl: resolveDatabaseUrl() });
 
 const rollbackMarker = "rollback semantic postgres fixture";
 

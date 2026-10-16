@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { PrismaClient } from '@prisma/client';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { resolveDatabaseUrl } from '../src/lib/database-url';
+import { resolveDatabaseUrl } from './database-url-resolve';
 
 type LegacyRecord = Record<string, string | number | boolean | Date | null>;
 
@@ -90,7 +90,11 @@ function assertSameLegacyRecord(
     const matches =
       value instanceof Date && storedValue instanceof Date
         ? value.getTime() === storedValue.getTime()
-        : value === storedValue;
+        : typeof value === 'number' && typeof storedValue === 'bigint'
+          ? BigInt(value) === storedValue
+          : typeof value === 'bigint' && typeof storedValue === 'number'
+            ? value === BigInt(storedValue)
+            : value === storedValue;
     if (!matches) {
       matchesAll = false;
     }
@@ -152,7 +156,11 @@ async function importTable(
   }
   for (const expected of pending) {
     const inserted = await model.findUnique({ where: { id: expected.id as string } });
-    assertSameLegacyRecord(table.table, expected, inserted);
+    if (!assertSameLegacyRecord(table.table, expected, inserted)) {
+      throw new Error(
+        `Legacy ${table.table} row diverged after insert and was not reported as imported.`
+      );
+    }
   }
   return { imported, skipped, divergent };
 }

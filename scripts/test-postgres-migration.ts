@@ -3,12 +3,13 @@
 import { Database } from 'bun:sqlite';
 import { PrismaClient } from '@prisma/client';
 import { resolve } from 'node:path';
-import { db } from '../src/lib/db';
 import { importSqliteDatabase } from './import-sqlite';
-import { resolveDatabaseUrl } from '../src/lib/database-url';
+import { resolveDatabaseUrl } from './database-url-resolve';
+
+const databaseUrl = resolveDatabaseUrl();
+const db = new PrismaClient({ datasourceUrl: databaseUrl });
 
 const sourcePath = resolve(process.env.LEGACY_SQLITE_PATH ?? 'db/custom.db');
-const databaseUrl = resolveDatabaseUrl();
 const tableNames = [
   'Project',
   'AnalysisJob',
