@@ -506,7 +506,14 @@ export async function runNextSemanticAnalysis(
     return { status: sawSkipped ? "skipped" : "idle" };
   }
 
-  const verifiedModel = await getVerifiedFreeModel(selected.model);
+  let verifiedModel: string;
+  try {
+    verifiedModel = await getVerifiedFreeModel(selected.model);
+  } catch {
+    return persistFailure(selected.analysisId, "free_model_unavailable", true, {
+      projectId: selected.project.id,
+    });
+  }
   if (!verifiedModel || verifiedModel !== selected.model) {
     return persistFailure(selected.analysisId, "free_model_unavailable", true, {
       projectId: selected.project.id,

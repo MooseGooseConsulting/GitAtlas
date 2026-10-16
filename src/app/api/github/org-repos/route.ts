@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-function parseStoredJson(value: string | null) {
-  if (!value) return null;
+function toSafeGithubId(value: unknown): number | string | null {
+  // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot serialize
+  // bigint. Guard with Number.isSafeInteger and fall back to string.
+  if (typeof value === "bigint") {
+    const asNumber = Number(value);
+    return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+  }
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) ? value : String(value);
+  }
+  return null;
+}
+
+function parseStoredJson(value: string | null) {  if (!value) return null;
   try {
     return JSON.parse(value);
   } catch {
@@ -33,6 +45,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       projects: projects.map((project) => ({
         ...project,
+        githubId: toSafeGithubId(
+          (project as unknown as { githubId?: unknown }).githubId,
+        ),
         topics: project.topics ? project.topics.split(",").filter(Boolean) : [],
         tags: project.tags ? project.tags.split(",").filter(Boolean) : [],
         fileTree: parseStoredJson(project.fileTree),
