@@ -24,12 +24,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'username is required' }, { status: 400 });
     }
 
+    // Why "all": the portfolio-first landing reads the whole persisted corpus
+    // (every accessible owner), not just one owner's repositories.
     const projects = await db.project.findMany({
-      where: {
-        OR: [
-          { ownerLogin: username },
-        ],
-      },
+      where: username === 'all'
+        ? {}
+        : {
+            OR: [
+              { ownerLogin: username },
+            ],
+          },
       orderBy: { githubUpdatedAt: 'desc' },
     });
 

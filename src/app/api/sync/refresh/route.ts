@@ -1,126 +1,139 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { GITHUB_HEADERS } from '@/lib/github-token';
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import {
+  getInventoryScope,
+  refreshAccessibleInventory,
+} from "@/lib/github-inventory-sync";
+import { isInternalRequestAuthorized } from "@/lib/internal-sync-auth";
 
-/**
- * POST /api/sync/refresh
- *
- * Why this exists:
- *   The full `/api/github/fetch` route is heavy (it walks every page, every org,
- *   every README). For ongoing "live" refresh we only need to detect which repos
- *   changed since the last poll and mark them stale so the enrichment worker can
- *   re-analyze them on its next pass.
- *
- * Logic:
- *   1. Pull only the first page (sort=updated) of the user's repos. GitHub
- *      returns them in updated-desc order, so anything beyond the most recent
- *      30-100 is by definition older than what we already have.
- *   2. Compare each repo's `updated_at` against the row in the DB. If it's
- *      newer, clear `analyzedAt` and `deepAnalyzedAt` so the enrich worker
- *      will pick it up.
- *   3. If a repo is new (not in DB yet), upsert a minimal row so the next
- *      enrich tick will fill in the analysis.
- *
- * This route is intentionally cheap so it can run on a tight interval
- * (default: every 15 minutes via the sync-worker).
- */
-export async function POST(request: NextRequest) {
+const STALE_AFTER_MS = 30 * 60 * 1000;
+
+export async function GET() {
   try {
-    const { username } = await request.json();
-    if (!username || typeof username !== 'string') {
-      return NextResponse.json({ error: 'username is required' }, { status: 400 });
-    }
-
-    // Cheap "what changed" probe: just the first page sorted by updated.
-    const res = await fetch(
-      `https://api.github.com/users/${username}/repos?per_page=100&page=1&sort=updated`,
-      { headers: GITHUB_HEADERS }
-    );
-    if (!res.ok) {
-      const errText = await res.text();
-      return NextResponse.json(
-        { error: `GitHub API error: ${res.status} ${errText}` },
-        { status: res.status },
-      );
-    }
-    const repos: any[] = await res.json();
-
-    const existing = await db.project.findMany({
-      where: { ownerLogin: username },
-      select: { githubId: true, githubUpdatedAt: true },
+    const [scope, heads] = await Promise.all([
+      db.syncState.findUnique({
+        where: { scope: getInventoryScope() },
+      }),
+      db.syncState.findUnique({
+        where: { scope: "github:default-branch-heads" },
+      }),
+    ]);
+    const [projectCount, staleProjectCount, unverifiedProjectCount] = await Promise.all([
+      db.project.count(),
+      db.project.count({ where: { inventoryStatus: "stale" } }),
+      db.project.count({ where: { inventoryStatus: "unverified" } }),
+    ]);
+    const stale =
+      scope?.lastSuccessAt != null &&
+      Date.now() - scope.lastSuccessAt.getTime() > STALE_AFTER_MS;
+    const headsStale =
+      heads?.lastSuccessAt != null &&
+      Date.now() - heads.lastSuccessAt.getTime() > STALE_AFTER_MS;
+    const inventoryStatus = stale && scope?.status === "current"
+      ? "stale"
+      : scope?.status ?? "unknown";
+    const headsStatus = headsStale && heads?.status === "current"
+      ? "stale"
+      : heads?.status ?? "unknown";
+    const status = ["partial", "deferred", "failed"].includes(headsStatus)
+      ? headsStatus
+      : headsStatus === "stale" || inventoryStatus === "stale"
+        ? "stale"
+      : inventoryStatus;
+    return NextResponse.json({
+      scope: getInventoryScope(),
+      status,
+      fetchedAt: scope?.fetchedAt ?? null,
+      lastSuccessAt: scope?.lastSuccessAt ?? null,
+      retryAt:
+        headsStatus === "deferred"
+          ? (heads?.retryAt ?? scope?.retryAt ?? null)
+          : (scope?.retryAt ?? null),
+      errorCode:
+        headsStatus === "deferred" || headsStatus === "partial"
+          ? (heads?.errorCode ?? scope?.errorCode ?? null)
+          : (scope?.errorCode ?? null),
+      itemCount: scope?.itemCount ?? projectCount,
+      pagesFetched: scope?.pagesFetched ?? 0,
+      retainedProjectCount: projectCount,
+      staleProjectCount,
+      unverifiedProjectCount,
+      resources: {
+        repositories: {
+          status: inventoryStatus,
+          fetchedAt: scope?.fetchedAt ?? null,
+          lastSuccessAt: scope?.lastSuccessAt ?? null,
+        },
+        defaultBranchHeads: {
+          status: headsStatus,
+          fetchedAt: heads?.fetchedAt ?? null,
+          lastSuccessAt: heads?.lastSuccessAt ?? null,
+          retryAt: heads?.retryAt ?? null,
+          errorCode: heads?.errorCode ?? null,
+          itemCount: heads?.itemCount ?? 0,
+          unsupportedCount: heads?.unsupportedCount ?? 0,
+          unverifiedCount: Math.max(
+            0,
+            (scope?.itemCount ?? 0) -
+              (heads?.itemCount ?? 0) -
+              (heads?.unsupportedCount ?? 0),
+          ),
+        },
+      },
     });
-    // Prisma returns githubId as bigint on PostgreSQL while GitHub supplies
-    // numbers; Map keys use SameValueZero (42n !== 42), so normalize both
-    // sides to String for the lookup.
-    const existingMap = new Map(existing.map((r) => [String(r.githubId), r.githubUpdatedAt]));
+  } catch {
+    return NextResponse.json(
+      { error: "Inventory freshness is temporarily unavailable." },
+      { status: 503 },
+    );
+  }
+}
 
-    let changed = 0;
-    let created = 0;
-    for (const repo of repos) {
-      const newUpdated = new Date(repo.updated_at);
-      const prev = existingMap.get(String(repo.id));
+export async function POST(request: NextRequest) {
+  if (!isInternalRequestAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-      if (!prev) {
-        // Brand new repo. Upsert a thin row; enrich worker will hydrate it.
-        await db.project.create({
-          data: {
-            githubId: BigInt(repo.id),
-            name: repo.name,
-            fullName: repo.full_name,
-            description: repo.description,
-            htmlUrl: repo.html_url,
-            homepage: repo.homepage,
-            language: repo.language,
-            stargazersCount: repo.stargazers_count ?? 0,
-            forksCount: repo.forks_count ?? 0,
-            openIssuesCount: repo.open_issues_count ?? 0,
-            githubCreatedAt: new Date(repo.created_at),
-            githubUpdatedAt: newUpdated,
-            pushedAt: repo.pushed_at ? new Date(repo.pushed_at) : null,
-            topics: (repo.topics || []).join(','),
-            isFork: repo.fork ?? false,
-            isArchived: repo.archived ?? false,
-            ownerLogin: repo.owner?.login ?? username,
-            ownerType: repo.owner?.type ?? 'User',
-            ownerAvatarUrl: repo.owner?.avatar_url ?? null,
-            defaultBranch: repo.default_branch ?? 'main',
-            visibility: repo.visibility ?? 'public',
-          },
-        });
-        created++;
-        continue;
-      }
-
-      if (newUpdated.getTime() > prev.getTime()) {
-        // Why null both fields: marking analyzedAt/deepAnalyzedAt as null is the
-        // signal the enrich-next worker uses to pick a repo up for re-analysis.
-        await db.project.update({
-          where: { githubId: BigInt(repo.id) },
-          data: {
-            githubUpdatedAt: newUpdated,
-            pushedAt: repo.pushed_at ? new Date(repo.pushed_at) : null,
-            stargazersCount: repo.stargazers_count ?? 0,
-            forksCount: repo.forks_count ?? 0,
-            openIssuesCount: repo.open_issues_count ?? 0,
-            description: repo.description,
-            topics: (repo.topics || []).join(','),
-            isArchived: repo.archived ?? false,
-            analyzedAt: null,
-            deepAnalyzedAt: null,
-          },
-        });
-        changed++;
-      }
-    }
-
+  try {
+    const result = await refreshAccessibleInventory();
     return NextResponse.json({
       ok: true,
-      probed: repos.length,
-      changed,
-      created,
+      scope: getInventoryScope(),
+      ...result,
     });
-  } catch (err: any) {
-    console.error('sync/refresh failed:', err);
-    return NextResponse.json({ error: err?.message || 'unknown error' }, { status: 500 });
+  } catch (error) {
+    const providerError =
+      error instanceof Error && "status" in error
+        ? (error as Error & {
+            status: number;
+            code?: string;
+            retryAt?: string | null;
+            pagesFetched?: number;
+          })
+        : null;
+    if (!providerError) {
+      console.error("sync/refresh failed.");
+      return NextResponse.json(
+        { error: "Inventory refresh failed." },
+        { status: 500 },
+      );
+    }
+    const scope = await db.syncState.findUnique({
+      where: { scope: getInventoryScope() },
+    });
+    return NextResponse.json(
+      {
+        ok: false,
+        scope: getInventoryScope(),
+        status: scope?.status ?? "failed",
+        fetchedAt: scope?.fetchedAt ?? null,
+        lastSuccessAt: scope?.lastSuccessAt ?? null,
+        itemCount: scope?.itemCount ?? 0,
+        pagesFetched: providerError.pagesFetched ?? 0,
+        retryAt: providerError.retryAt ?? null,
+        errorCode: providerError.code ?? "provider_failure",
+      },
+      { status: providerError.status },
+    );
   }
 }

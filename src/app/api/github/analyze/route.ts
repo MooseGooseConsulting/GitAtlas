@@ -4,8 +4,12 @@ import { db } from '@/lib/db';
 // the user can point GitAtlas at any provider (OpenAI, OpenRouter, local
 // Ollama / vLLM, etc.) via env vars. See src/lib/llm.ts.
 import { chat } from '@/lib/llm';
+import { isInternalRequestAuthorized } from '@/lib/internal-sync-auth';
 
 export async function POST(request: NextRequest) {
+  if (!isInternalRequestAuthorized(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const { jobId } = await request.json();
     if (!jobId) {
@@ -99,8 +103,8 @@ Be honest and concrete. If the project seems unfinished or experimental, say so.
               };
             }
             return null;
-          } catch (err) {
-            console.error(`Error analyzing ${project.fullName}:`, err);
+          } catch {
+            console.error("Shallow analysis failed for a repository.");
             return null;
           }
         })
@@ -140,8 +144,8 @@ Be honest and concrete. If the project seems unfinished or experimental, say so.
       processed,
       total: projects.length,
     });
-  } catch (error: any) {
-    console.error('Analyze error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch {
+    console.error("Shallow analysis request failed.");
+    return NextResponse.json({ error: "Analysis request failed" }, { status: 500 });
   }
 }
