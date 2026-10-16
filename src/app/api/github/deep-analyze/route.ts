@@ -3,8 +3,15 @@ import { db } from '@/lib/db';
 import { GITHUB_HEADERS } from '@/lib/github-token';
 // Why: provider-agnostic LLM client (see src/lib/llm.ts).
 import { chat } from '@/lib/llm';
+import { isInternalRequestAuthorized } from '@/lib/internal-sync-auth';
 
 export async function POST(request: NextRequest) {
+  // KEEP: internal token gate. UI (page.tsx) and sync-worker send
+  // Authorization: Bearer <GITATLAS_INTERNAL_SYNC_TOKEN>; unauth callers get
+  // 401 by design. Do not remove this gate (finding A).
+  if (!isInternalRequestAuthorized(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await request.json();
     const { projectId, username, repoIndex } = body;
@@ -32,7 +39,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No projects found for deep analysis', results: [], total: 0 });
     }
 
-    const results: { id: string; name: string; status: string }[] = [];
+    const results: { id: string; name: string; status: string; error?: string }[] = [];
 
     // Process in batches of 3 to avoid rate limiting
     const batchSize = 3;
@@ -43,9 +50,9 @@ export async function POST(request: NextRequest) {
         batch.map(async (project) => {
           try {
             return await analyzeProject(project, username);
-          } catch (err: any) {
-            console.error(`Deep analyze error for ${project.name}:`, err.message);
-            return { id: project.id, name: project.name, status: 'failed', error: err.message };
+          } catch {
+            console.error("Deep analysis failed for a repository.");
+            return { id: project.id, name: project.name, status: 'failed', error: 'Analysis failed' };
           }
         })
       );
@@ -54,7 +61,7 @@ export async function POST(request: NextRequest) {
         if (result.status === 'fulfilled') {
           results.push(result.value);
         } else {
-          results.push({ id: 'unknown', name: 'unknown', status: 'failed', error: result.reason?.message });
+          results.push({ id: 'unknown', name: 'unknown', status: 'failed', error: 'Analysis failed' });
         }
       }
 
@@ -65,9 +72,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ results, total: results.length });
-  } catch (error: any) {
-    console.error('Deep analyze error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch {
+    console.error("Deep analysis request failed.");
+    return NextResponse.json({ error: "Analysis request failed" }, { status: 500 });
   }
 }
 
@@ -121,10 +128,10 @@ async function handleProgressiveAnalysis(
       completed: newCompleted,
       nextIndex: newCompleted, // Frontend can use this as the next repoIndex
     });
-  } catch (err: any) {
-    console.error(`Progressive deep analyze error for ${project.name}:`, err.message);
+  } catch {
+    console.error("Progressive deep analysis failed for a repository.");
     return NextResponse.json({
-      result: { id: project.id, name: project.name, status: 'failed', error: err.message },
+      result: { id: project.id, name: project.name, status: 'failed', error: 'Analysis failed' },
       total: totalForUser,
       completed: completedCount,
       nextIndex: completedCount,
@@ -138,7 +145,7 @@ async function handleProgressiveAnalysis(
 async function analyzeProject(
   project: any,
   username: string
-): Promise<{ id: string; name: string; status: string }> {
+): Promise<{ id: string; name: string; status: string; error?: string }> {
   // Build file tree from repo contents via GitHub API
   const fileTree = await buildFileTree(project.fullName, project.defaultBranch);
 
@@ -518,8 +525,8 @@ async function generateDeepSummary(
     if (summary && summary.length > 10) {
       return summary;
     }
-  } catch (err) {
-    console.error('LLM summary failed, falling back to heuristic:', err);
+  } catch {
+    console.error("Deep summary generation failed; using bounded metadata fallback.");
   }
 
   // Fallback: heuristic summary

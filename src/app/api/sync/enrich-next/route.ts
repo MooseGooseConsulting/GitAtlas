@@ -1,89 +1,55 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { NextRequest, NextResponse } from "next/server";
+import { isInternalRequestAuthorized } from "@/lib/internal-sync-auth";
+import { runNextSemanticAnalysis } from "@/lib/semantic-analysis";
 
 /**
- * POST /api/sync/enrich-next
- *
- * Why this exists:
- *   The 5 AI routes (analyze, deep-analyze, smart-search, rewrite-readme,
- *   recommendations) ARE the "subagents". This endpoint is the *orchestrator*:
- *   it picks the single most-stale repo and runs the next required enrichment
- *   step for it. The sync-worker (in /mini-services) calls this on a tight
- *   interval so the dashboard stays continuously up-to-date.
- *
- * Strategy (priority order):
- *   1. If any project has `analyzedAt = null`, run shallow analyze on its owner's
- *      whole pending batch via /api/github/analyze (it processes in batches).
- *   2. Otherwise if any project has `deepAnalyzedAt = null`, pick one and run
- *      deep-analyze for it.
- *   3. Otherwise return `{ done: true }`.
- *
- * Body: { username, baseUrl? } where baseUrl defaults to the request origin.
+ * Process one bounded revision-aware analysis. Every successful or incomplete
+ * result is persisted before returning, so the next worker tick can resume it.
  */
 export async function POST(request: NextRequest) {
+  if (!isInternalRequestAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await request.json().catch(() => ({}));
-    const username: string | undefined = body.username;
-    if (!username) {
-      return NextResponse.json({ error: 'username is required' }, { status: 400 });
+    const username: unknown = body.username;
+    const projectId: unknown = body.projectId;
+    if (
+      username !== undefined &&
+      (typeof username !== "string" || username.length > 100)
+    ) {
+      return NextResponse.json(
+        { error: "username must be a bounded string" },
+        { status: 400 },
+      );
     }
-    // Why prefer the request origin: when called by the worker from the same
-    // host the worker can pass an explicit baseUrl; in the browser/local case
-    // the origin is correct automatically.
-    const origin = body.baseUrl || new URL(request.url).origin;
-
-    // Step 1: any shallow-pending repos for this user?
-    const pendingShallow = await db.project.findFirst({
-      where: { ownerLogin: username, summary: null },
-      select: { id: true },
+    if (
+      projectId !== undefined &&
+      (typeof projectId !== "string" || projectId.length > 100)
+    ) {
+      return NextResponse.json(
+        { error: "projectId must be a bounded string" },
+        { status: 400 },
+      );
+    }
+    const result = await runNextSemanticAnalysis(
+      {
+        ...(typeof username === "string" ? { ownerLogin: username } : {}),
+        ...(typeof projectId === "string" ? { projectId } : {}),
+      },
+    );
+    return NextResponse.json({
+      step: "semantic",
+      done: result.status === "idle" || result.status === "skipped",
+      result,
     });
-    if (pendingShallow) {
-      // Spawn an analysis job (shallow). Why: the analyze route accepts a jobId
-      // and handles batching/state itself, so we keep this orchestrator dumb.
-      const job = await db.analysisJob.create({
-        data: {
-          username,
-          status: 'pending',
-          totalRepos: await db.project.count({
-            where: { ownerLogin: username, summary: null },
-          }),
-          processedRepos: 0,
-          jobType: 'shallow',
-        },
-      });
-      const res = await fetch(`${origin}/api/github/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: job.id }),
-      });
-      const data = await res.json().catch(() => ({}));
-      return NextResponse.json({ step: 'shallow', jobId: job.id, result: data });
-    }
-
-    // Step 2: pick one deep-pending repo.
-    const pendingDeep = await db.project.findFirst({
-      where: { ownerLogin: username, deepAnalyzedAt: null },
-      orderBy: { githubUpdatedAt: 'desc' },
-      select: { id: true, fullName: true },
-    });
-    if (pendingDeep) {
-      const res = await fetch(`${origin}/api/github/deep-analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Why: deep-analyze accepts { username, projectId } to target a single repo.
-        body: JSON.stringify({ username, projectId: pendingDeep.id }),
-      });
-      const data = await res.json().catch(() => ({}));
-      return NextResponse.json({
-        step: 'deep',
-        project: pendingDeep.fullName,
-        result: data,
-      });
-    }
-
-    return NextResponse.json({ done: true });
-  } catch (err: any) {
-    console.error('sync/enrich-next failed:', err);
-    return NextResponse.json({ error: err?.message || 'unknown error' }, { status: 500 });
+  } catch {
+    // Do not include provider error text, prompts, source content, or tokens.
+    console.error("sync/enrich-next failed");
+    return NextResponse.json(
+      { error: "Semantic analysis could not be completed" },
+      { status: 500 },
+    );
   }
 }

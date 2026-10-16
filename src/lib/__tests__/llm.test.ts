@@ -1,5 +1,5 @@
 // src/lib/__tests__/llm.test.ts
-import { expect, test, describe } from 'bun:test';
+import { expect, test, describe } from 'vitest';
 
 // Why test this: our system depends on structured JSON from LLMs that 
 // often inject prose or markdown fences. Our 'chatJSON' method must be 
