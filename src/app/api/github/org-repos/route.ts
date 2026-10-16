@@ -131,6 +131,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       projects: projects.map(p => ({
         ...p,
+        // Prisma returns BigInt for githubId on PostgreSQL; JSON cannot
+        // serialize bigint, so convert at the API boundary.
+        githubId: Number(p.githubId),
         topics: p.topics ? p.topics.split(',').filter(Boolean) : [],
         tags: p.tags ? p.tags.split(',').filter(Boolean) : [],
         fileTree: p.fileTree ? (typeof p.fileTree === 'string' ? JSON.parse(p.fileTree) : p.fileTree) : null,

@@ -132,8 +132,10 @@ async function run() {
   );
   assert(
     !(await db.project.findUnique({ where: { id: legacyProject.id } })) &&
+      // Prisma returns githubId as bigint on PostgreSQL while SQLite yields a
+      // number; compare BigInt-aware so the identity check is type-stable.
       (await db.project.findUnique({ where: { id: conflictingProjectId } }))
-        ?.githubId === legacyProject.githubId,
+        ?.githubId === BigInt(legacyProject.githubId),
     "Project natural-key conflict changed the existing PostgreSQL identity.",
   );
   await db.project.delete({ where: { id: conflictingProjectId } });
@@ -202,7 +204,8 @@ async function run() {
     assert(created.id === smokeId, 'Prisma did not return the inserted project.');
 
     const read = await transaction.project.findUnique({ where: { id: smokeId } });
-    assert(read?.githubId === -2_147_483_000, 'Prisma could not read the inserted project.');
+    // githubId is BigInt on PostgreSQL; compare against a bigint literal.
+    assert(read?.githubId === BigInt(-2_147_483_000), 'Prisma could not read the inserted project.');
 
     const updated = await transaction.project.update({
       where: { id: smokeId },
