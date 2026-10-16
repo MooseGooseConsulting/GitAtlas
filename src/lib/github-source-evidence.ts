@@ -111,6 +111,9 @@ export async function fetchRepositorySourceSamples(
     where: {
       projectId: project.id,
       sourceType: { in: ["issue", "commit"] },
+      // Exclude tombstoned rows: they disappeared upstream and must not
+      // displace live items in the bounded semantic sample.
+      NOT: { sourceState: "tombstoned" },
     },
     orderBy: { sourceUpdatedAt: "desc" },
     take: MAX_ISSUE_SAMPLES + MAX_COMMIT_SAMPLES,
