@@ -9,9 +9,11 @@
   override the source path. Import preserves IDs and every field in all four
   current Prisma models, verifies inserted rows, and refuses mismatched
   duplicate IDs/natural keys rather than overwriting data.
-- `bun run db:test-migration` checks initial/duplicate import behavior, counts
-  after opening a fresh Prisma client, and app Prisma create/read/update/delete
-  in a transaction. The check reports aggregate counts only.
+- `bun scripts/test-postgres-migration-isolated.ts` checks initial/duplicate
+  import behavior, counts after opening a fresh Prisma client, and app Prisma
+  create/read/update/delete in a transaction. The check reports aggregate
+  counts only. (The `db:test-migration` package.json shortcut is wired in
+  runtime PR #42, so run the script directly on this branch.)
 - Local imported counts in `gitatlas_dev`: Project 29, AnalysisJob 3,
   CommitActivityCache 1, RecentCommitsCache 0. The SQLite database remains
   tracked and unchanged.
@@ -36,20 +38,24 @@
   `scripts/import-sqlite.ts:157-164` calls `assertSameLegacyRecord` for each
   inserted row and throws when it returns false, so a freshly inserted row
   whose stored fields differ is reported.
-- `bun run db:test-migration` now runs the automated isolated wrapper
-  (`package.json` `db:test-migration` -> `scripts/test-postgres-migration-isolated.ts`), which
+- `bun scripts/test-postgres-migration-isolated.ts` runs the automated
+  isolated wrapper (`scripts/test-postgres-migration-isolated.ts`), which
   creates a process-unique `gitatlas_verify_<uuid>` schema in the configured
   database, applies migrations twice, runs `scripts/test-postgres-migration.ts`
   (identical rerun, changed same-ID preserved, different-ID conflict rejected,
   natural-key rollback, Prisma CRUD), and drops the schema on success or
   failure. It needs CREATE/DROP SCHEMA privilege on the configured database;
   it never writes the live schema. The older manual create/migrate/import/drop
-  recipe is superseded by this wrapper.
+  recipe is superseded by this wrapper. (The `db:test-migration` package.json
+  shortcut is wired in runtime PR #42; use the direct `bun scripts/...`
+  command on this branch.)
 - Still relevant for direct runs: the `?host=%2Frun%2Fpostgresql&schema=` URL
   form and setting `GITATLAS_DATABASE_URL` (not `DATABASE_URL`) are the
   non-obvious parts. `db:import-sqlite` targets the configured schema, so it
   inserts legacy-only rows when pointed at live `gitatlas_dev`.
 - Direct Prisma CLI calls (`bunx prisma migrate status`) fail with P1012 because
   the tracked `.env` still holds the legacy `DATABASE_URL="file:./db/custom.db"`.
-  Use the `bun run db:migrate` / `db:import-sqlite` / `db:test-migration`
-  wrappers, or set `GITATLAS_DATABASE_URL` explicitly.
+  Use the `bun run db:migrate` / `db:import-sqlite` wrappers,
+  `bun scripts/test-postgres-migration-isolated.ts` for the isolated check
+  (the `db:test-migration` shortcut lands in runtime PR #42),
+  or set `GITATLAS_DATABASE_URL` explicitly.
