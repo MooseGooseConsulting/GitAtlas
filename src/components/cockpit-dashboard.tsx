@@ -27,9 +27,10 @@ import { ThemeToggle } from '@/components/theme-toggle';
 // trigger (a Button beside Settings) lives in this file. The panel itself
 // reads its open state from the Zustand store, so we just need to mount it.
 import { GraphTweaksPanel } from '@/components/graph-tweaks-panel';
-import { ConceptGroups, CONCEPT_GROUPS, getProjectsForGroup } from '@/components/concept-groups';
-import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters } from '@/components/advanced-filters';
+import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById, getNextConceptFilterBoundary, getProjectsForGroup } from '@/components/concept-groups';
+import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters, countAdvancedFilters, getDelayUntilBoundary, getNextActivityFilterBoundary } from '@/components/advanced-filters';
 import { ConceptDrilldown } from '@/components/concept-drilldown';
+import { CockpitActiveFilters } from '@/components/cockpit-active-filters';
 import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
@@ -99,6 +100,7 @@ export function CockpitDashboard() {
     // Why: cockpit triggers the panel via setShowGraphTweaksPanel; we don't
     // need to read the boolean here because GraphTweaksPanel subscribes.
     setShowGraphTweaksPanel,
+    activeConceptGroups, setActiveConceptGroups,
   } = useAtlasStore();
 
   const [smartSearchOpen, setSmartSearchOpen] = useState(false);
@@ -116,8 +118,33 @@ export function CockpitDashboard() {
   const [aiRecommendationsOpen, setAiRecommendationsOpen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<'activity' | 'commits'>('activity');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeConceptGroups, setActiveConceptGroups] = useState<string[]>([]);
+  const [portfolioVisibleCount, setPortfolioVisibleCount] = useState(0);
   const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterState>(DEFAULT_FILTERS);
+  const hasActiveFilterChips = countAdvancedFilters(advancedFilters) > 0 || activeConceptGroups.length > 0;
+  const activityRangeDays = advancedFilters.activityRangeDays;
+  const hasActivityRange = activityRangeDays[0] > 0 || activityRangeDays[1] < 365;
+  const [activityFilterNow, setActivityFilterNow] = useState(() => Date.now());
+
+  const handleAdvancedFiltersChange = useCallback((nextFilters: AdvancedFilterState) => {
+    setActivityFilterNow(Date.now());
+    setAdvancedFilters(nextFilters);
+  }, []);
+
+  useEffect(() => {
+    const boundaries = [
+      hasActivityRange ? getNextActivityFilterBoundary(projects, activityRangeDays, activityFilterNow) : null,
+      getNextConceptFilterBoundary(projects, activityFilterNow),
+    ].filter((boundary): boundary is number => boundary !== null);
+    if (boundaries.length === 0) return;
+
+    const nextBoundary = Math.min(...boundaries);
+
+    const timeout = window.setTimeout(
+      () => setActivityFilterNow(Date.now()),
+      getDelayUntilBoundary(nextBoundary),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [hasActivityRange, projects, activityRangeDays, activityFilterNow]);
   const [drilldownOpen, setDrilldownOpen] = useState(false);
   const [drilldownProjects, setDrilldownProjects] = useState<Project[]>([]);
   const [drilldownTitle, setDrilldownTitle] = useState('');
@@ -274,9 +301,23 @@ export function CockpitDashboard() {
     }
   }, [projects, activityFilter]);
 
-  // Filtered projects — include deep analysis data in search + concept groups + advanced filters
-  const filteredProjects = useMemo(() => {
-    let filtered = projects.filter(p => {
+  // Apply shared structured filters before each view's search semantics.
+  // Portfolio also searches work titles, so it receives this scope directly.
+  const structuredProjects = useMemo(() => {
+    const tagged = projects.filter(p => {
+      if (activeTags.length === 0) return true;
+      const projectTags = [...p.tags, ...p.topics];
+      if (p.category) projectTags.push(p.category);
+      return activeTags.some(tag => projectTags.includes(tag));
+    });
+    return applyAdvancedFilters(
+      filterProjectsByConceptGroups(tagged, activeConceptGroups, activityFilterNow),
+      advancedFilters,
+      activityFilterNow,
+    );
+  }, [projects, activeTags, activeConceptGroups, advancedFilters, activityFilterNow]);
+
+  const filteredProjects = useMemo(() => structuredProjects.filter(p => {
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const searchable = [
@@ -289,29 +330,8 @@ export function CockpitDashboard() {
         ].filter(Boolean).join(' ').toLowerCase();
         if (!searchable.includes(q)) return false;
       }
-      if (activeTags.length > 0) {
-        const projectTags = [...p.tags, ...p.topics];
-        if (p.category) projectTags.push(p.category);
-        if (!activeTags.some(t => projectTags.includes(t))) return false;
-      }
       return true;
-    });
-
-    // Apply concept group filtering
-    if (activeConceptGroups.length > 0) {
-      const conceptMatchIds = new Set<string>();
-      for (const groupKey of activeConceptGroups) {
-        const groupProjects = getProjectsForGroup(projects, groupKey);
-        groupProjects.forEach(p => conceptMatchIds.add(p.id));
-      }
-      filtered = filtered.filter(p => conceptMatchIds.has(p.id));
-    }
-
-    // Apply advanced filters
-    filtered = applyAdvancedFilters(filtered, advancedFilters);
-
-    return filtered;
-  }, [projects, searchQuery, activeTags, activeConceptGroups, advancedFilters]);
+  }), [structuredProjects, searchQuery]);
 
   // Refresh handler
   const handleRefresh = useCallback(async () => {
@@ -450,35 +470,16 @@ export function CockpitDashboard() {
     }
   }, [isLoadingOrgRepos, hasOrgRepos, username, setProjects]);
 
-  // Concept group toggle handler
-  const handleToggleConceptGroup = useCallback((groupKey: string) => {
-    setActiveConceptGroups(prev => {
-      const next = prev.includes(groupKey) ? prev.filter(k => k !== groupKey) : [...prev, groupKey];
-      return next;
-    });
-  }, []);
-
   // Drill down handler
   const handleDrillDown = useCallback((groupKey: string) => {
-    const groupProjects = getProjectsForGroup(projects, groupKey);
-    const group = CONCEPT_GROUPS.find(g => g.id === groupKey);
+    const groupProjects = getProjectsForGroup(projects, groupKey, activityFilterNow);
+    const group = getConceptGroupById(groupKey);
     if (groupProjects.length === 0) return;
     setDrilldownProjects(groupProjects);
     setDrilldownTitle(groupKey);
     setDrilldownIcon(group?.icon || '🔍');
     setDrilldownOpen(true);
-  }, [projects]);
-
-  // Advanced filter count
-  const advancedFilterCount = useMemo(() => {
-    let count = 0;
-    if (advancedFilters.selectedLanguages.length > 0) count++;
-    if (advancedFilters.selectedCategories.length > 0) count++;
-    if (advancedFilters.minStars > 0) count++;
-    if (advancedFilters.onlyAnalyzed) count++;
-    if (advancedFilters.onlyNotArchived) count++;
-    return count;
-  }, [advancedFilters]);
+  }, [projects, activityFilterNow]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden page-load-animation">
@@ -569,9 +570,7 @@ export function CockpitDashboard() {
           )}
         </div>
 
-        {/* Wraps like the header itself so every control stays reachable on
-            narrow screens (VAL-UI-008). */}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2">
           {/* Search with animated width on focus */}
           <div className="relative w-40 focus-within:w-56 transition-all duration-300">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/40" />
@@ -595,7 +594,8 @@ export function CockpitDashboard() {
           <div className="h-4 w-px bg-border/10" />
 
           {/* Advanced Filters */}
-          <AdvancedFilters />
+          <AdvancedFilters projects={projects} filters={advancedFilters} onChange={handleAdvancedFiltersChange} />
+
 
           {/* Smart search — tour target. Stays inline at every width so the
               onboarding tour target remains mounted (VAL-UI-008). */}
@@ -874,6 +874,17 @@ export function CockpitDashboard() {
           </Button>
         </div>
       </header>
+      {hasActiveFilterChips && (
+        <div className="flex shrink-0 justify-end max-h-24 overflow-y-auto px-4 py-1">
+          <CockpitActiveFilters
+            filters={advancedFilters}
+            activeConceptGroups={activeConceptGroups}
+            onFiltersChange={handleAdvancedFiltersChange}
+            onConceptGroupsChange={setActiveConceptGroups}
+          />
+        </div>
+      )}
+
       {/* Graph Semantics quick info — below header when in graph view */}
       {viewMode === 'graph' && (
         <div className="h-5 shrink-0 flex items-center px-4 gap-3 border-b border-border/5" style={{ background: 'rgba(16,185,129,0.02)' }}>
@@ -1014,7 +1025,7 @@ export function CockpitDashboard() {
                     <div className="h-px bg-gradient-to-r from-transparent via-border/20 to-transparent" />
 
                     {/* Concept Groups */}
-                    <ConceptGroups />
+                    <ConceptGroups now={activityFilterNow} />
 
                     {/* Section divider */}
                     <div className="h-px bg-gradient-to-r from-transparent via-border/20 to-transparent" />
@@ -1097,7 +1108,7 @@ export function CockpitDashboard() {
                 transition={{ duration: 0.2, ease: 'easeInOut' }}
                 className="h-full"
               >
-                <PortfolioOverview />
+                <PortfolioOverview scopedProjects={structuredProjects} onVisibleCountChange={setPortfolioVisibleCount} />
               </motion.div>
             ) : isLoading ? (
               <motion.div
@@ -1307,7 +1318,7 @@ export function CockpitDashboard() {
               tour-graph-area panel it floats in both stay mounted. */}
           {!isLoading && (
             <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-1.5 rounded-full bg-card/60 backdrop-blur-xl border border-border/20 text-[10px] text-muted-foreground/60 shadow-lg shadow-black/10">
-              <span>{filteredProjects.length} of {projects.length} projects</span>
+              <span>{viewMode === 'portfolio' ? portfolioVisibleCount : filteredProjects.length} of {projects.length} projects</span>
               {activeTags.length > 0 && <span>Filtered by {activeTags.length} tags</span>}
               {searchQuery && <span>Matching &quot;{searchQuery}&quot;</span>}
               {deepAnalyzedCount > 0 && (

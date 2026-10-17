@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 
-interface ConceptGroup {
+export interface ConceptGroup {
   id: string;
   icon: string;
   label: string;
@@ -122,12 +122,12 @@ const CONCEPT_GROUPS: ConceptGroup[] = [
   },
 ];
 
-function matchesConceptGroup(project: Project, group: ConceptGroup): boolean {
+function matchesConceptGroup(project: Project, group: ConceptGroup, now = Date.now()): boolean {
   if (group.special === 'phoenix') {
     // Phoenix = flagship projects: ≥5 stars or pushed in last 7 days with ≥1 star
     const hasStars = project.stargazersCount >= 5;
     const recentlyActive = project.pushedAt
-      ? (Date.now() - new Date(project.pushedAt).getTime() < 7 * 24 * 60 * 60 * 1000) && project.stargazersCount >= 1
+      ? (now - new Date(project.pushedAt).getTime() < 7 * 24 * 60 * 60 * 1000) && project.stargazersCount >= 1
       : false;
     return hasStars || recentlyActive;
   }
@@ -135,17 +135,17 @@ function matchesConceptGroup(project: Project, group: ConceptGroup): boolean {
   // Firebird: Was archived OR had no push for 6+ months, then got a push in the last 30 days
   if (group.special === 'firebird') {
     if (!project.pushedAt) return false;
-    const daysSincePush = (Date.now() - new Date(project.pushedAt).getTime()) / (1000 * 60 * 60 * 24);
+    const daysSincePush = (now - new Date(project.pushedAt).getTime()) / (1000 * 60 * 60 * 24);
     const recentlyPushed = daysSincePush < 30;
-    const wasDormant = project.isArchived || (project.githubCreatedAt && (Date.now() - new Date(project.githubCreatedAt).getTime() > 180 * 24 * 60 * 60 * 1000));
+    const wasDormant = project.isArchived || Boolean(project.githubCreatedAt && (now - new Date(project.githubCreatedAt).getTime() > 180 * 24 * 60 * 60 * 1000));
     return recentlyPushed && wasDormant;
   }
 
   // Rising Star: Created in last 90 days with pushes in last 30 days
   if (group.special === 'rising-star') {
     if (!project.pushedAt || !project.githubCreatedAt) return false;
-    const daysSinceCreation = (Date.now() - new Date(project.githubCreatedAt).getTime()) / (1000 * 60 * 60 * 24);
-    const daysSincePush = (Date.now() - new Date(project.pushedAt).getTime()) / (1000 * 60 * 60 * 24);
+    const daysSinceCreation = (now - new Date(project.githubCreatedAt).getTime()) / (1000 * 60 * 60 * 24);
+    const daysSincePush = (now - new Date(project.pushedAt).getTime()) / (1000 * 60 * 60 * 24);
     return daysSinceCreation < 90 && daysSincePush < 30;
   }
 
@@ -188,17 +188,51 @@ function matchesConceptGroup(project: Project, group: ConceptGroup): boolean {
   return group.keywords.some(kw => searchText.includes(kw));
 }
 
-export function ConceptGroups() {
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+export function getNextConceptFilterBoundary(projects: Project[], now = Date.now()): number | null {
+  let nextBoundary: number | null = null;
+  const consider = (candidate: number | null) => {
+    if (candidate !== null && candidate > now && (nextBoundary === null || candidate < nextBoundary)) {
+      nextBoundary = candidate;
+    }
+  };
+
+  for (const project of projects) {
+    const pushedAt = project.pushedAt ? new Date(project.pushedAt).getTime() : NaN;
+    const createdAt = project.githubCreatedAt ? new Date(project.githubCreatedAt).getTime() : NaN;
+
+    if (project.stargazersCount >= 1 && project.stargazersCount < 5 && Number.isFinite(pushedAt)) {
+      consider(pushedAt + 7 * DAY_IN_MS);
+    }
+
+    if (Number.isFinite(pushedAt)) {
+      consider(pushedAt + 30 * DAY_IN_MS);
+      if (!project.isArchived && Number.isFinite(createdAt)) {
+        consider(createdAt + 180 * DAY_IN_MS + 1);
+      }
+    }
+
+    if (Number.isFinite(pushedAt) && Number.isFinite(createdAt)) {
+      consider(createdAt + 90 * DAY_IN_MS);
+      consider(pushedAt + 30 * DAY_IN_MS);
+    }
+  }
+
+  return nextBoundary;
+}
+
+export function ConceptGroups({ now = Date.now() }: { now?: number } = {}) {
   const { projects, activeConceptGroups, toggleConceptGroup, setActiveConceptGroups } = useAtlasStore();
 
   const groupCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const group of CONCEPT_GROUPS) {
-      const count = projects.filter(p => matchesConceptGroup(p, group)).length;
+      const count = projects.filter(p => matchesConceptGroup(p, group, now)).length;
       counts.set(group.id, count);
     }
     return counts;
-  }, [projects]);
+  }, [projects, now]);
 
   return (
     <div>
@@ -250,9 +284,26 @@ export function ConceptGroups() {
 // Export for use in filtering logic
 export { CONCEPT_GROUPS, matchesConceptGroup };
 
-// Utility for cockpit-dashboard to get projects matching a specific group
-export function getProjectsForGroup(projects: Project[], groupId: string): Project[] {
-  const group = CONCEPT_GROUPS.find(g => g.id === groupId);
+export function getConceptGroupById(groupId: string): ConceptGroup | undefined {
+  return CONCEPT_GROUPS.find(group => group.id === groupId);
+}
+
+// Utility for cockpit-dashboard to get projects matching one or more groups
+export function getProjectsForGroup(projects: Project[], groupId: string, now = Date.now()): Project[] {
+  const group = getConceptGroupById(groupId);
   if (!group) return [];
-  return projects.filter(p => matchesConceptGroup(p, group));
+  return projects.filter(p => matchesConceptGroup(p, group, now));
+}
+
+// Concept selections combine with OR semantics; the caller intersects this
+// set with search and advanced filters.
+export function filterProjectsByConceptGroups(projects: Project[], groupIds: string[], now = Date.now()): Project[] {
+  if (groupIds.length === 0) return projects;
+  const matchingIds = new Set<string>();
+  for (const groupId of groupIds) {
+    for (const project of getProjectsForGroup(projects, groupId, now)) {
+      matchingIds.add(project.id);
+    }
+  }
+  return projects.filter(project => matchingIds.has(project.id));
 }

@@ -15,13 +15,15 @@
 //   1. Missing GITHUB_WEBHOOK_SECRET → 503, not a 2xx that silently writes.
 //   2. Wrong / absent signature → 401, not processed.
 //   3. The route NEVER touches the DB without first passing HMAC verification.
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 
 // ── DB mock ─────────────────────────────────────────────────────────────────
-// Must be set up BEFORE the route is dynamically imported below so the mocked
-// @/lib/db is served to the route's static import.
-const mockUpdate = vi.fn((_args: unknown) => Promise.resolve({ githubId: 1 }));
+// Must be set up BEFORE the route is dynamically imported below so Vitest's
+// module registry serves the mock to the route's static import of @/lib/db.
+const { mockUpdate } = vi.hoisted(() => ({
+  mockUpdate: vi.fn((..._args: unknown[]) => Promise.resolve({ githubId: 1 })),
+}));
 
 vi.mock('@/lib/db', () => ({
   db: {
@@ -70,7 +72,7 @@ beforeEach(() => {
   process.env.GITHUB_WEBHOOK_SECRET = TEST_SECRET;
   mockUpdate.mockClear();
   // Restore default implementation after each test clears it
-  mockUpdate.mockImplementation((_args: unknown) => Promise.resolve({ githubId: 1 }));
+  mockUpdate.mockImplementation(() => Promise.resolve({ githubId: 1 }));
 });
 
 afterEach(() => {
@@ -164,7 +166,7 @@ describe('valid signed events', () => {
 
     // DB was called exactly once with the right args
     expect(mockUpdate).toHaveBeenCalledTimes(1);
-    const callArgs = mockUpdate.mock.calls[0] as unknown[];
+    const [callArgs] = mockUpdate.mock.calls;
     expect(callArgs[0]).toMatchObject({
       where: { githubId: 42 },
       data: { analyzedAt: null, deepAnalyzedAt: null },
@@ -249,7 +251,7 @@ describe('error handling', () => {
   });
 
   test('200 with missing:true when DB update throws (repo not synced locally)', async () => {
-    mockUpdate.mockImplementation((_args: unknown) => Promise.reject(new Error('Record to update not found')));
+    mockUpdate.mockImplementation(() => Promise.reject(new Error('Record to update not found')));
 
     const sig = hmacSign(TEST_SECRET, PUSH_PAYLOAD);
     const req = makeRequest(PUSH_PAYLOAD, {
