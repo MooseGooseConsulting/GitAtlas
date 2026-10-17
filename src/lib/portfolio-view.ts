@@ -284,6 +284,14 @@ export function filterPortfolioProjects<T extends FilterableProject>(
   queues: WorkQueues | null,
 ): T[] {
   const query = searchQuery.trim().toLowerCase();
+  const matchingWorkProjectIds = new Set<string>();
+  if (query && queues) {
+    const matching = narrowWorkQueues(queues, searchQuery, new Set(projects.map(project => project.id)));
+    for (const entries of Object.values(matching.queues)) {
+      for (const entry of entries) matchingWorkProjectIds.add(entry.projectId);
+    }
+    for (const entry of matching.uncertain) matchingWorkProjectIds.add(entry.projectId);
+  }
   const queueProjectIds = new Map<QueueName, Set<string>>();
   if (queues) {
     (Object.keys(queues.queues) as QueueName[]).forEach((name) => {
@@ -302,7 +310,7 @@ export function filterPortfolioProjects<T extends FilterableProject>(
       const haystack = [project.fullName, project.name, project.description ?? "", project.language ?? ""]
         .join(" ")
         .toLowerCase();
-      if (!haystack.includes(query)) return false;
+      if (!haystack.includes(query) && !matchingWorkProjectIds.has(project.id)) return false;
     }
     switch (filter) {
       case "all":
