@@ -110,7 +110,13 @@ function QueueEntryRow({
   );
 }
 
-export function PortfolioOverview() {
+export function PortfolioOverview({
+  scopedProjects,
+  onVisibleCountChange,
+}: {
+  scopedProjects?: Project[];
+  onVisibleCountChange?: (count: number) => void;
+} = {}) {
   const {
     projects,
     searchQuery,
@@ -174,9 +180,13 @@ export function PortfolioOverview() {
 
   const filteredProjects = useMemo(
     () =>
-      filterPortfolioProjects(projects, searchQuery, portfolioStatusFilter, summary?.queues ?? null),
-    [projects, searchQuery, portfolioStatusFilter, summary],
+      filterPortfolioProjects(scopedProjects ?? projects, searchQuery, portfolioStatusFilter, summary?.queues ?? null),
+    [projects, scopedProjects, searchQuery, portfolioStatusFilter, summary],
   );
+
+  useEffect(() => {
+    onVisibleCountChange?.(filteredProjects.length);
+  }, [filteredProjects.length, onVisibleCountChange]);
 
   // Empty queues are a missing/stale-evidence statement, not an observation
   // that no work exists. Computed before the early returns so hook order is
@@ -195,12 +205,12 @@ export function PortfolioOverview() {
   // showing unrelated detail.
   const filteredIds = useMemo(() => new Set(filteredProjects.map((p) => p.id)), [filteredProjects]);
   useEffect(() => {
-    if (searchQuery === '' && portfolioStatusFilter === 'all') return;
+    if (scopedProjects === undefined && searchQuery === '' && portfolioStatusFilter === 'all') return;
     const { selectedProject } = useAtlasStore.getState();
     if (selectedProject && !filteredIds.has(selectedProject.id)) {
       setSelectedProject(null);
     }
-  }, [filteredIds, searchQuery, portfolioStatusFilter, setSelectedProject]);
+  }, [filteredIds, scopedProjects, searchQuery, portfolioStatusFilter, setSelectedProject]);
 
   // Work-queue rows and counts narrow with the same shared search and the
   // same selected status as the repository list: a row survives when it
@@ -575,12 +585,13 @@ export function PortfolioOverview() {
             <div className="rounded-lg border border-dashed border-border/30 p-6 text-center space-y-2">
               <p className="text-sm text-foreground/70">No repositories match the current filters.</p>
               <p className="text-[10px] text-muted-foreground/60">
-                The corpus still holds {summary.corpus.total} repositories; clearing filters
-                restores the full list.
+                The corpus still holds {summary.corpus.total} repositories; adjust the filter chips and controls above to change the selected scope.
               </p>
-              <Button variant="outline" size="sm" onClick={clearFilters}>
-                <X className="w-3 h-3" /> Clear filters
-              </Button>
+              {(searchQuery || portfolioStatusFilter !== 'all') && (
+                <Button variant="outline" size="sm" onClick={clearFilters}>
+                  <X className="w-3 h-3" /> Clear search and status
+                </Button>
+              )}
             </div>
           ) : (
             <div className="rounded-lg border border-border/20 divide-y divide-border/10">
