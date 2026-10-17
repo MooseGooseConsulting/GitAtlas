@@ -2,6 +2,7 @@
 
 import { useAtlasStore } from '@/lib/store';
 import { CATEGORY_COLORS, LANGUAGE_COLORS, Project } from '@/lib/types';
+import { PortfolioOverview } from '@/components/portfolio-overview';
 import { ProjectGraph } from '@/components/project-graph';
 import { ProjectGrid } from '@/components/project-grid';
 import { TimelineView } from '@/components/timeline-view';
@@ -21,6 +22,7 @@ import { RelationshipMap } from '@/components/relationship-map';
 import { AIRecommendations } from '@/components/ai-recommendations';
 import { HealthDashboard } from '@/components/health-dashboard';
 import { SettingsDialog } from '@/components/settings-dialog';
+import { ThemeToggle } from '@/components/theme-toggle';
 // Why imported here: cockpit owns the top-level controls bar, so the panel
 // trigger (a Button beside Settings) lives in this file. The panel itself
 // reads its open state from the Zustand store, so we just need to mount it.
@@ -30,6 +32,13 @@ import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFil
 import { ConceptDrilldown } from '@/components/concept-drilldown';
 import { CockpitActiveFilters } from '@/components/cockpit-active-filters';
 import { Badge } from '@/components/ui/badge';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,14 +47,14 @@ import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, 
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Star, GitFork, Activity, Zap, Search,
-  Network, LayoutGrid, Flame, Clock, Loader2,
+  Network, LayoutGrid, LayoutDashboard, Flame, Clock, Loader2,
   FolderOpen, ChevronRight, X,
   Microscope, Calendar, FileText, Keyboard,
   ShieldCheck, AlertTriangle, Archive, GitCompare,
   Building2, BarChart3, RefreshCw, Microscope as DeepAnalyzeIcon,
   Download, Share2, Target, Bookmark as BookmarkIcon,
   Code2, Tag, GitCommit, Hash, Layers, Trophy,
-  Circle, GitBranch, Heart, Settings, Sliders,
+  Circle, GitBranch, Heart, Settings, Sliders, MoreHorizontal,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
@@ -53,7 +62,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 // --- AnimatedCounter: counts from 0 to target, re-animates when target changes ---
 function AnimatedCounter({ target, duration = 800 }: { target: number; duration?: number }) {
   const [value, setValue] = useState(0);
-  const ref = useRef<ReturnType<typeof requestAnimationFrame>>();
+  const ref = useRef<ReturnType<typeof requestAnimationFrame> | undefined>(undefined);
   const prevTarget = useRef(0);
 
   useEffect(() => {
@@ -161,6 +170,10 @@ export function CockpitDashboard() {
         setSmartSearchOpen(false);
         setShowKeyboardHelp(false);
         setCommandPaletteOpen(false);
+      }
+      if (e.key === '0' && e.metaKey) {
+        e.preventDefault();
+        setViewMode('portfolio');
       }
       if (e.key === '1' && e.metaKey) {
         e.preventDefault();
@@ -472,9 +485,14 @@ export function CockpitDashboard() {
       {/* Onboarding Tour */}
       <OnboardingTour />
 
-      {/* Top bar — glassmorphism with animated gradient */}
+      {/* Top bar — glassmorphism with animated gradient.
+          Why flex-wrap: at 390px the old single-row header pushed the top
+          search, theme toggle and the Portfolio/Graph/Grid/Timeline switcher
+          outside the viewport (VAL-UI-008). Rows now wrap, secondary actions
+          collapse into the "More" menu below md, and the decorative stats
+          strip hides below lg. */}
       <header
-        className="flex flex-wrap items-center gap-3 px-4 py-2 shrink-0 relative backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_1px_3px_rgba(0,0,0,0.2)]"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 shrink-0 relative backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_1px_3px_rgba(0,0,0,0.2)]"
         style={{
           background: 'linear-gradient(135deg, rgba(16,185,129,0.06) 0%, rgba(20,20,25,0.8) 30%, rgba(20,20,25,0.85) 70%, rgba(245,158,11,0.04) 100%)',
           animation: 'headerGradient 8s ease-in-out infinite alternate',
@@ -498,9 +516,11 @@ export function CockpitDashboard() {
           </button>
         </div>
 
-        <div className="h-4 w-px bg-border/20" />
+        <div className="h-4 w-px bg-border/20 hidden sm:block" />
 
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        {/* Decorative stats strip — hides below lg so narrow headers wrap
+            into two compact rows instead of three (VAL-UI-008). */}
+        <div className="hidden lg:flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="font-medium text-foreground/80 flex items-center gap-1.5">
             {username}
             <Circle className="w-1.5 h-1.5 fill-emerald-400 text-emerald-400 animate-pulse" />
@@ -576,7 +596,8 @@ export function CockpitDashboard() {
           <AdvancedFilters projects={projects} filters={advancedFilters} onChange={handleAdvancedFiltersChange} />
 
 
-          {/* Smart search — tour target */}
+          {/* Smart search — tour target. Stays inline at every width so the
+              onboarding tour target remains mounted (VAL-UI-008). */}
           <div id="tour-smart-search">
             <Button
               variant="outline"
@@ -585,51 +606,51 @@ export function CockpitDashboard() {
               className="h-7 gap-1 text-xs border-amber-500/30 text-amber-400 hover:bg-gradient-to-r hover:from-amber-500/10 hover:to-amber-600/5 hover:shadow-[0_0_10px_rgba(245,158,11,0.1)] hover:border-amber-500/50 transition-all px-2"
               title="✅ Functional: Smart Search — Ask if you already have a tool for a specific purpose"
             >
-              <Zap className="w-3 h-3" />Do I have...?
+              <Zap className="w-3 h-3" /><span className="hidden sm:inline">Do I have...?</span>
             </Button>
           </div>
 
-          {/* AI Recommendations */}
+          {/* AI Recommendations — collapses into "More" below md (VAL-UI-008) */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setAiRecommendationsOpen(true)}
-            className="h-7 gap-1 text-xs border-amber-500/30 text-amber-400 hover:bg-gradient-to-r hover:from-amber-500/10 hover:to-amber-600/5 hover:shadow-[0_0_10px_rgba(245,158,11,0.1)] hover:border-amber-500/50 transition-all px-2"
+            className="hidden md:inline-flex h-7 gap-1 text-xs border-amber-500/30 text-amber-400 hover:bg-gradient-to-r hover:from-amber-500/10 hover:to-amber-600/5 hover:shadow-[0_0_10px_rgba(245,158,11,0.1)] hover:border-amber-500/50 transition-all px-2"
             title="⚠️ Partial: AI Recommendations — LLM-powered project suggestions (requires deep analysis data)"
           >
             <Sparkles className="w-3 h-3" />AI Suggestions
           </Button>
 
-          {/* Compare */}
+          {/* Compare — collapses into "More" below md (VAL-UI-008) */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setCompareOpen(true)}
-            className="h-7 gap-1 text-xs border-cyan-500/30 text-cyan-400 hover:bg-gradient-to-r hover:from-cyan-500/10 hover:to-cyan-600/5 hover:shadow-[0_0_10px_rgba(6,182,212,0.1)] hover:border-cyan-500/50 transition-all px-2"
+            className="hidden md:inline-flex h-7 gap-1 text-xs border-cyan-500/30 text-cyan-400 hover:bg-gradient-to-r hover:from-cyan-500/10 hover:to-cyan-600/5 hover:shadow-[0_0_10px_rgba(6,182,212,0.1)] hover:border-cyan-500/50 transition-all px-2"
             title="✅ Functional: Compare any two projects side-by-side"
           >
             <GitCompare className="w-3 h-3" />Compare
           </Button>
 
-          {/* Export */}
+          {/* Export — collapses into "More" below md (VAL-UI-008) */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setExportOpen(true)}
-            className="h-7 gap-1 text-xs border-emerald-500/30 text-emerald-400 hover:bg-gradient-to-r hover:from-emerald-500/10 hover:to-emerald-600/5 hover:shadow-[0_0_10px_rgba(16,185,129,0.1)] hover:border-emerald-500/50 transition-all px-2"
+            className="hidden md:inline-flex h-7 gap-1 text-xs border-emerald-500/30 text-emerald-400 hover:bg-gradient-to-r hover:from-emerald-500/10 hover:to-emerald-600/5 hover:shadow-[0_0_10px_rgba(16,185,129,0.1)] hover:border-emerald-500/50 transition-all px-2"
             title="✅ Functional: Export your portfolio as Markdown or JSON"
           >
             <Download className="w-3 h-3" />Export
           </Button>
 
-          {/* Org Repos */}
+          {/* Org Repos — collapses into "More" below md (VAL-UI-008) */}
           {!hasOrgRepos && (
             <Button
               variant="outline"
               size="sm"
               onClick={handleFetchOrgRepos}
               disabled={isLoadingOrgRepos}
-              className="h-7 gap-1 text-xs border-orange-500/30 text-orange-400 hover:bg-gradient-to-r hover:from-orange-500/10 hover:to-orange-600/5 hover:shadow-[0_0_10px_rgba(249,115,22,0.1)] hover:border-orange-500/50 transition-all px-2"
+              className="hidden md:inline-flex h-7 gap-1 text-xs border-orange-500/30 text-orange-400 hover:bg-gradient-to-r hover:from-orange-500/10 hover:to-orange-600/5 hover:shadow-[0_0_10px_rgba(249,115,22,0.1)] hover:border-orange-500/50 transition-all px-2"
               title="✅ Functional: Load ProjectBroadside organization repos"
             >
               {isLoadingOrgRepos ? (
@@ -653,18 +674,18 @@ export function CockpitDashboard() {
               {isDeepAnalyzing ? (
                 <><Loader2 className="w-3 h-3 animate-spin" /> Analyzing...</>
               ) : (
-                <><Microscope className="w-3 h-3" /> Deep Analyze</>
+                <><Microscope className="w-3 h-3" /><span className="hidden sm:inline">Deep Analyze</span></>
               )}
             </Button>
           </div>
 
-          {/* Rewrite All READMEs */}
+          {/* Rewrite All READMEs — collapses into "More" below md (VAL-UI-008) */}
           <Button
             variant="outline"
             size="sm"
             onClick={handleBatchRewriteReadmes}
             disabled={isRewritingReadmes || isDeepAnalyzing}
-            className="h-7 gap-1 text-xs border-violet-500/30 text-violet-400 hover:bg-gradient-to-r hover:from-violet-500/10 hover:to-violet-600/5 hover:shadow-[0_0_10px_rgba(139,92,246,0.1)] hover:border-violet-500/50 transition-all px-2"
+            className="hidden md:inline-flex h-7 gap-1 text-xs border-violet-500/30 text-violet-400 hover:bg-gradient-to-r hover:from-violet-500/10 hover:to-violet-600/5 hover:shadow-[0_0_10px_rgba(139,92,246,0.1)] hover:border-violet-500/50 transition-all px-2"
             title="✅ Functional: Rewrite READMEs — Generate AI READMEs based on deep analysis"
           >
             {isRewritingReadmes ? (
@@ -676,34 +697,91 @@ export function CockpitDashboard() {
 
           {/* Tune Graph — opens the live physics/connection panel.
               Why beside Settings: same visual weight, but distinct concern:
-              Settings = app config, Tune Graph = visualization tuning. */}
+              Settings = app config, Tune Graph = visualization tuning.
+              Collapses into "More" below md (VAL-UI-008). */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setShowGraphTweaksPanel(true)}
-            className="h-7 gap-1 text-xs border-border/20 text-muted-foreground/50 hover:text-foreground/70 hover:border-border/40 transition-all px-2"
+            className="hidden md:inline-flex h-7 gap-1 text-xs border-border/20 text-muted-foreground/50 hover:text-foreground/70 hover:border-border/40 transition-all px-2"
             title="Tune graph physics, layout, and connection sources"
           >
             <Sliders className="w-3 h-3" />
             <span className="hidden sm:inline">Tune Graph</span>
           </Button>
 
-          {/* Settings */}
+          {/* Overflow menu — below md the secondary header actions collapse
+              here so essential controls (search, theme, view switcher) stay
+              reachable at 390px instead of clipping (VAL-UI-008). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 text-xs border-border/20 text-muted-foreground/60 hover:text-foreground/80 md:hidden px-2"
+                aria-label="More actions"
+                title="More actions"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">More</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 text-xs">
+              <DropdownMenuItem onClick={() => setAiRecommendationsOpen(true)}>
+                <Sparkles className="w-3 h-3 mr-2 text-amber-400" />AI Suggestions
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCompareOpen(true)}>
+                <GitCompare className="w-3 h-3 mr-2 text-cyan-400" />Compare
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setExportOpen(true)}>
+                <Download className="w-3 h-3 mr-2 text-emerald-400" />Export
+              </DropdownMenuItem>
+              {!hasOrgRepos && (
+                <DropdownMenuItem onClick={handleFetchOrgRepos} disabled={isLoadingOrgRepos}>
+                  <Building2 className="w-3 h-3 mr-2 text-orange-400" />
+                  {isLoadingOrgRepos ? 'Loading...' : 'Org Repos'}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={handleBatchRewriteReadmes} disabled={isRewritingReadmes || isDeepAnalyzing}>
+                <FileText className="w-3 h-3 mr-2 text-violet-400" />Rewrite READMEs
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowGraphTweaksPanel(true)}>
+                <Sliders className="w-3 h-3 mr-2 text-muted-foreground" />Tune Graph
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                <Settings className="w-3 h-3 mr-2 text-muted-foreground" />Settings
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowDetailGrid(prev => !prev)}>
+                <LayoutGrid className="w-3 h-3 mr-2 text-muted-foreground" />
+                {showDetailGrid ? 'Hide Cards' : 'Show Cards'}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowKeyboardHelp(prev => !prev)}>
+                <Keyboard className="w-3 h-3 mr-2 text-muted-foreground" />Keyboard shortcuts
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Light/dark theme toggle — the shared semantic palette has paired
+              light/dark classes, so both themes must be reachable. */}
+          <ThemeToggle />
+
+          {/* Settings — inline from md up; collapses into "More" below md */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setSettingsOpen(true)}
-            className="h-7 gap-1 text-xs border-border/20 text-muted-foreground/50 hover:text-foreground/70 hover:border-border/40 transition-all px-2"
+            className="hidden md:inline-flex h-7 gap-1 text-xs border-border/20 text-muted-foreground/50 hover:text-foreground/70 hover:border-border/40 transition-all px-2"
             title="✅ Functional: Settings"
           >
             <Settings className="w-3 h-3" />
             <span className="hidden sm:inline">Settings</span>
           </Button>
 
-          {/* Keyboard help */}
+          {/* Keyboard help — inline from md up; collapses into "More" below md */}
           <button
             onClick={() => setShowKeyboardHelp(prev => !prev)}
-            className="h-7 w-7 flex items-center justify-center text-muted-foreground/40 hover:text-foreground/60 rounded transition-colors"
+            className="hidden md:flex h-7 w-7 items-center justify-center text-muted-foreground/40 hover:text-foreground/60 rounded transition-colors"
             title="Keyboard shortcuts (? )"
           >
             <Keyboard className="w-3.5 h-3.5" />
@@ -711,6 +789,13 @@ export function CockpitDashboard() {
 
           {/* View toggle */}
           <div className="flex bg-card/30 rounded border border-border/20 p-0.5">
+            <button
+              onClick={() => setViewMode('portfolio')}
+              className={`p-1 rounded text-xs flex items-center gap-1 ${viewMode === 'portfolio' ? 'bg-emerald-600/20 text-emerald-400' : 'text-muted-foreground hover:text-foreground'}`}
+              title="✅ Functional: Portfolio Overview (⌘0)"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+            </button>
             <button
               onClick={() => setViewMode('graph')}
               className={`p-1 rounded text-xs flex items-center gap-1 ${viewMode === 'graph' ? 'bg-emerald-600/20 text-emerald-400' : 'text-muted-foreground hover:text-foreground'}`}
@@ -780,7 +865,7 @@ export function CockpitDashboard() {
             variant="ghost"
             size="sm"
             onClick={() => setShowDetailGrid(!showDetailGrid)}
-            className={`h-7 gap-1 text-xs ${showDetailGrid ? 'text-emerald-400' : 'text-muted-foreground'}`}
+            className={`hidden md:inline-flex h-7 gap-1 text-xs ${showDetailGrid ? 'text-emerald-400' : 'text-muted-foreground'}`}
             title="✅ Functional: Show/Hide card strip at bottom"
           >
             <LayoutGrid className="w-3.5 h-3.5" />
@@ -1013,7 +1098,18 @@ export function CockpitDashboard() {
         {/* CENTER — Main visualization */}
         <ResizablePanel defaultSize={58} minSize={40} className="overflow-hidden relative" id="tour-graph-area">
           <AnimatePresence mode="wait">
-            {isLoading ? (
+            {viewMode === 'portfolio' ? (
+              <motion.div
+                key="portfolio"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
+                className="h-full"
+              >
+                <PortfolioOverview />
+              </motion.div>
+            ) : isLoading ? (
               <motion.div
                 key="loading"
                 initial={{ opacity: 0, scale: 0.98 }}
@@ -1213,9 +1309,14 @@ export function CockpitDashboard() {
             )}
           </AnimatePresence>
 
-          {/* Floating stats pill — glass morphism, more informative */}
+          {/* Floating stats pill — glass morphism, more informative.
+              Purely decorative: pointer-events-none keeps it from intercepting
+              clicks on repository rows / graph nodes that scroll or pan
+              underneath its bottom-center strip (VAL-UI-006 pointer
+              interception diagnosed with elementFromPoint). The pill and the
+              tour-graph-area panel it floats in both stay mounted. */}
           {!isLoading && (
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-1.5 rounded-full bg-card/60 backdrop-blur-xl border border-border/20 text-[10px] text-muted-foreground/60 shadow-lg shadow-black/10">
+            <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-1.5 rounded-full bg-card/60 backdrop-blur-xl border border-border/20 text-[10px] text-muted-foreground/60 shadow-lg shadow-black/10">
               <span>{filteredProjects.length} of {projects.length} projects</span>
               {activeTags.length > 0 && <span>Filtered by {activeTags.length} tags</span>}
               {searchQuery && <span>Matching &quot;{searchQuery}&quot;</span>}

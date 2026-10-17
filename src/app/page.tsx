@@ -4,6 +4,16 @@ import { useEffect } from 'react';
 import { useAtlasStore } from '@/lib/store';
 import { CockpitDashboard } from '@/components/cockpit-dashboard';
 
+// KEEP: /api/github/fetch and /api/github/analyze stay token-gated server-side.
+// The browser sends Authorization when a public sync token is configured;
+// without it the server returns 401 by design (finding A). The token is
+// intentionally read from a NEXT_PUBLIC env so deploys can opt into browser
+// calls; do not hardcode it here.
+function internalAuthHeaders(): Record<string, string> {
+  const token = process.env.NEXT_PUBLIC_GITATLAS_INTERNAL_SYNC_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export default function Home() {
   const { username, isLoading, isDataLoaded, setProjects, setAnalysisJob, setLoading, setAnalyzing, setFetchProgress, setAnalyzeProgress, setDataLoaded } = useAtlasStore();
 
@@ -34,10 +44,11 @@ export default function Home() {
           }
         }
 
-        // No cached data — fetch from GitHub
+        // No cached data — fetch from GitHub (internal gate: Authorization
+        // header wired via internalAuthHeaders; 401 surfaces as fetch error).
         const fetchRes = await fetch('/api/github/fetch', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
           body: JSON.stringify({ username }),
         });
 
@@ -78,10 +89,10 @@ export default function Home() {
       setAnalyzing(true);
       setAnalyzeProgress('AI analyzing projects...');
 
-      // Fire analysis
+      // Fire analysis (same internal gate as fetch above).
       fetch('/api/github/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
         body: JSON.stringify({ jobId }),
       }).then(async (res) => {
         if (res.ok) {

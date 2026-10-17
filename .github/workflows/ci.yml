@@ -1,14 +1,22 @@
 name: CI
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || vars.CI_FORCE_HOSTED == 'true') && 'ubuntu-latest' || 'moosegoose-linux' }}
+    runs-on: ${{ (github.repository != 'MooseGooseConsulting/GitAtlas' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || vars.CI_FORCE_HOSTED == 'true') && 'ubuntu-latest' || 'moosegoose-linux' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1.2.2
       - name: Install dependencies
         run: bun install
       - name: Lint
         run: bun run lint
       - name: Test
-        run: bun run test
+        # Generate needs a PostgreSQL-format URL (schema provider is
+        # postgresql); the tracked .env SQLite URL would P1012 on runners
+        # without DATABASE_URL configured. Generate is build-time only —
+        # no DB connection is opened.
+        run: DATABASE_URL=${DATABASE_URL:-postgresql://ci:ci@localhost:5432/gitatlas_ci} bunx prisma generate && bunx vitest run
