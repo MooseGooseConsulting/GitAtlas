@@ -465,7 +465,7 @@ export function CockpitDashboard() {
     setDrilldownTitle(groupKey);
     setDrilldownIcon(group?.icon || '🔍');
     setDrilldownOpen(true);
-  }, [projects]);
+  }, [projects, activityFilterNow]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden page-load-animation">
@@ -474,7 +474,7 @@ export function CockpitDashboard() {
 
       {/* Top bar — glassmorphism with animated gradient */}
       <header
-        className="flex items-center gap-3 px-4 py-2 shrink-0 relative backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_1px_3px_rgba(0,0,0,0.2)]"
+        className="flex flex-wrap items-center gap-3 px-4 py-2 shrink-0 relative backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_1px_3px_rgba(0,0,0,0.2)]"
         style={{
           background: 'linear-gradient(135deg, rgba(16,185,129,0.06) 0%, rgba(20,20,25,0.8) 30%, rgba(20,20,25,0.85) 70%, rgba(245,158,11,0.04) 100%)',
           animation: 'headerGradient 8s ease-in-out infinite alternate',
@@ -549,7 +549,7 @@ export function CockpitDashboard() {
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2">
           {/* Search with animated width on focus */}
           <div className="relative w-40 focus-within:w-56 transition-all duration-300">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/40" />
