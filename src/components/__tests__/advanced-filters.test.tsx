@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
-import { AdvancedFilters, applyAdvancedFilters, DEFAULT_FILTERS, removeAdvancedFilter } from '@/components/advanced-filters';
+import { AdvancedFilters, applyAdvancedFilters, DEFAULT_FILTERS, removeAdvancedFilter, getNextActivityFilterBoundary, getDelayUntilBoundary, MAX_BROWSER_TIMEOUT_MS } from '@/components/advanced-filters';
 import type { Project } from '@/lib/types';
 import { useAtlasStore } from '@/lib/store';
 
@@ -69,6 +69,34 @@ describe('applyAdvancedFilters', () => {
       { ...DEFAULT_FILTERS, activityRangeDays: [1, 10] },
       now,
     )).toEqual([fiveDays]);
+  });
+
+  test('schedules an activity refresh only for the next project range boundary', () => {
+    const now = Date.parse('2026-10-12T00:00:00.000Z');
+    const fiveDaysAgo = makeProject({ id: 'five-days', pushedAt: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString() });
+
+    expect(getNextActivityFilterBoundary([fiveDaysAgo], [1, 10], now)).toBe(now + 5 * 24 * 60 * 60 * 1000 + 1);
+    expect(getNextActivityFilterBoundary([fiveDaysAgo], DEFAULT_FILTERS.activityRangeDays, now)).toBeNull();
+  });
+
+  test('caps long timer delays at the browser timeout limit', () => {
+    const now = Date.parse('2026-10-12T00:00:00.000Z');
+
+    expect(getDelayUntilBoundary(now + 30 * 24 * 60 * 60 * 1000, now)).toBe(MAX_BROWSER_TIMEOUT_MS);
+    expect(getDelayUntilBoundary(now + 100, now)).toBe(100);
+  });
+
+  test('range membership changes at its inclusive lower and upper edges', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const pushedAt = Date.parse('2026-10-12T00:00:00Z');
+    const project = makeProject({ pushedAt: new Date(pushedAt).toISOString() });
+    const filters = { ...DEFAULT_FILTERS, activityRangeDays: [1, 2] as [number, number] };
+    expect(applyAdvancedFilters([project], filters, pushedAt + day - 1)).toEqual([]);
+    expect(getNextActivityFilterBoundary([project], [1, 2], pushedAt + day - 1)).toBe(pushedAt + day);
+    expect(applyAdvancedFilters([project], filters, pushedAt + day)).toEqual([project]);
+    expect(applyAdvancedFilters([project], filters, pushedAt + 2 * day)).toEqual([project]);
+    expect(getNextActivityFilterBoundary([project], [1, 2], pushedAt + 2 * day)).toBe(pushedAt + 2 * day + 1);
+    expect(applyAdvancedFilters([project], filters, pushedAt + 2 * day + 1)).toEqual([]);
   });
 
   test('removing a selected filter preserves the other advanced filters', () => {

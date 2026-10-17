@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { CockpitActiveFilters } from '@/components/cockpit-active-filters';
-import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById } from '@/components/concept-groups';
+import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById, getNextConceptFilterBoundary } from '@/components/concept-groups';
 import { DEFAULT_FILTERS } from '@/components/advanced-filters';
 import type { Project } from '@/lib/types';
 import { useAtlasStore } from '@/lib/store';
@@ -78,6 +78,21 @@ describe('concept group selection and filtering', () => {
 
     expect(filtered).toEqual([aiProject, webProject]);
     expect(filtered.length).toBe(2);
+  });
+  test('recomputes date-based concepts at their next membership boundary', () => {
+    const now = Date.parse('2026-10-12T00:00:00.000Z');
+    const firebird = makeProject({
+      id: 'firebird',
+      stargazersCount: 0,
+      githubCreatedAt: new Date(now - 200 * 24 * 60 * 60 * 1000).toISOString(),
+      pushedAt: new Date(now - 29 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    expect(filterProjectsByConceptGroups([firebird], ['firebird'], now)).toEqual([firebird]);
+    expect(filterProjectsByConceptGroups([firebird], ['firebird'], now + 2 * 24 * 60 * 60 * 1000)).toEqual([]);
+    expect(getNextConceptFilterBoundary([firebird], now)).toBe(
+      Date.parse(firebird.pushedAt!) + 30 * 24 * 60 * 60 * 1000,
+    );
   });
 });
 

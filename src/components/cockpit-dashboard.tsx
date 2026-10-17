@@ -25,8 +25,8 @@ import { SettingsDialog } from '@/components/settings-dialog';
 // trigger (a Button beside Settings) lives in this file. The panel itself
 // reads its open state from the Zustand store, so we just need to mount it.
 import { GraphTweaksPanel } from '@/components/graph-tweaks-panel';
-import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById, getProjectsForGroup } from '@/components/concept-groups';
-import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters, clearActivityRange, removeAdvancedFilter } from '@/components/advanced-filters';
+import { ConceptGroups, filterProjectsByConceptGroups, getConceptGroupById, getNextConceptFilterBoundary, getProjectsForGroup } from '@/components/concept-groups';
+import { AdvancedFilters, AdvancedFilterState, DEFAULT_FILTERS, applyAdvancedFilters, countAdvancedFilters, getDelayUntilBoundary, getNextActivityFilterBoundary } from '@/components/advanced-filters';
 import { ConceptDrilldown } from '@/components/concept-drilldown';
 import { CockpitActiveFilters } from '@/components/cockpit-active-filters';
 import { Badge } from '@/components/ui/badge';
@@ -110,6 +110,31 @@ export function CockpitDashboard() {
   const [rightPanelTab, setRightPanelTab] = useState<'activity' | 'commits'>('activity');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterState>(DEFAULT_FILTERS);
+  const hasActiveFilterChips = countAdvancedFilters(advancedFilters) > 0 || activeConceptGroups.length > 0;
+  const activityRangeDays = advancedFilters.activityRangeDays;
+  const hasActivityRange = activityRangeDays[0] > 0 || activityRangeDays[1] < 365;
+  const [activityFilterNow, setActivityFilterNow] = useState(() => Date.now());
+
+  const handleAdvancedFiltersChange = useCallback((nextFilters: AdvancedFilterState) => {
+    setActivityFilterNow(Date.now());
+    setAdvancedFilters(nextFilters);
+  }, []);
+
+  useEffect(() => {
+    const boundaries = [
+      hasActivityRange ? getNextActivityFilterBoundary(projects, activityRangeDays, activityFilterNow) : null,
+      getNextConceptFilterBoundary(projects, activityFilterNow),
+    ].filter((boundary): boundary is number => boundary !== null);
+    if (boundaries.length === 0) return;
+
+    const nextBoundary = Math.min(...boundaries);
+
+    const timeout = window.setTimeout(
+      () => setActivityFilterNow(Date.now()),
+      getDelayUntilBoundary(nextBoundary),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [hasActivityRange, projects, activityRangeDays, activityFilterNow]);
   const [drilldownOpen, setDrilldownOpen] = useState(false);
   const [drilldownProjects, setDrilldownProjects] = useState<Project[]>([]);
   const [drilldownTitle, setDrilldownTitle] = useState('');
@@ -286,13 +311,13 @@ export function CockpitDashboard() {
     });
 
     // Apply concept group filtering
-    filtered = filterProjectsByConceptGroups(filtered, activeConceptGroups);
+    filtered = filterProjectsByConceptGroups(filtered, activeConceptGroups, activityFilterNow);
 
     // Apply advanced filters
-    filtered = applyAdvancedFilters(filtered, advancedFilters);
+    filtered = applyAdvancedFilters(filtered, advancedFilters, activityFilterNow);
 
     return filtered;
-  }, [projects, searchQuery, activeTags, activeConceptGroups, advancedFilters]);
+  }, [projects, searchQuery, activeTags, activeConceptGroups, advancedFilters, activityFilterNow]);
 
   // Refresh handler
   const handleRefresh = useCallback(async () => {
@@ -433,7 +458,7 @@ export function CockpitDashboard() {
 
   // Drill down handler
   const handleDrillDown = useCallback((groupKey: string) => {
-    const groupProjects = getProjectsForGroup(projects, groupKey);
+    const groupProjects = getProjectsForGroup(projects, groupKey, activityFilterNow);
     const group = getConceptGroupById(groupKey);
     if (groupProjects.length === 0) return;
     setDrilldownProjects(groupProjects);
@@ -548,13 +573,8 @@ export function CockpitDashboard() {
           <div className="h-4 w-px bg-border/10" />
 
           {/* Advanced Filters */}
-          <AdvancedFilters projects={projects} filters={advancedFilters} onChange={setAdvancedFilters} />
-          <CockpitActiveFilters
-            filters={advancedFilters}
-            activeConceptGroups={activeConceptGroups}
-            onFiltersChange={setAdvancedFilters}
-            onConceptGroupsChange={setActiveConceptGroups}
-          />
+          <AdvancedFilters projects={projects} filters={advancedFilters} onChange={handleAdvancedFiltersChange} />
+
 
           {/* Smart search — tour target */}
           <div id="tour-smart-search">
@@ -768,6 +788,17 @@ export function CockpitDashboard() {
           </Button>
         </div>
       </header>
+      {hasActiveFilterChips && (
+        <div className="flex shrink-0 justify-end max-h-24 overflow-y-auto px-4 py-1">
+          <CockpitActiveFilters
+            filters={advancedFilters}
+            activeConceptGroups={activeConceptGroups}
+            onFiltersChange={handleAdvancedFiltersChange}
+            onConceptGroupsChange={setActiveConceptGroups}
+          />
+        </div>
+      )}
+
       {/* Graph Semantics quick info — below header when in graph view */}
       {viewMode === 'graph' && (
         <div className="h-5 shrink-0 flex items-center px-4 gap-3 border-b border-border/5" style={{ background: 'rgba(16,185,129,0.02)' }}>
@@ -908,7 +939,7 @@ export function CockpitDashboard() {
                     <div className="h-px bg-gradient-to-r from-transparent via-border/20 to-transparent" />
 
                     {/* Concept Groups */}
-                    <ConceptGroups />
+                    <ConceptGroups now={activityFilterNow} />
 
                     {/* Section divider */}
                     <div className="h-px bg-gradient-to-r from-transparent via-border/20 to-transparent" />

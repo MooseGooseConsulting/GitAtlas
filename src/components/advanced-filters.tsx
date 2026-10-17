@@ -30,6 +30,12 @@ export const DEFAULT_FILTERS: AdvancedFilterState = {
   onlyNotArchived: false,
 };
 
+export const MAX_BROWSER_TIMEOUT_MS = 2_147_483_647;
+
+export function getDelayUntilBoundary(boundary: number, now = Date.now()): number {
+  return Math.min(MAX_BROWSER_TIMEOUT_MS, Math.max(1, boundary - now));
+}
+
 export function applyAdvancedFilters(projects: Project[], filters: AdvancedFilterState, now = Date.now()): Project[] {
   return projects.filter(p => {
     if (filters.selectedLanguages.length > 0 && (!p.language || !filters.selectedLanguages.includes(p.language))) return false;
@@ -49,6 +55,35 @@ export function applyAdvancedFilters(projects: Project[], filters: AdvancedFilte
     if (filters.onlyNotArchived && p.isArchived) return false;
     return true;
   });
+}
+
+export function getNextActivityFilterBoundary(
+  projects: Project[],
+  activityRangeDays: [number, number],
+  now = Date.now(),
+): number | null {
+  const [minAge, maxAge] = activityRangeDays;
+  if (minAge <= 0 && maxAge >= 365) return null;
+
+  const dayInMs = 24 * 60 * 60 * 1000;
+  let nextBoundary: number | null = null;
+  for (const project of projects) {
+    if (!project.pushedAt) continue;
+    const pushedAt = new Date(project.pushedAt).getTime();
+    if (!Number.isFinite(pushedAt)) continue;
+
+    // Minimum age is inclusive; the maximum edge expires one millisecond later.
+    const candidates = [
+      ...(minAge > 0 ? [pushedAt + minAge * dayInMs] : []),
+      pushedAt + maxAge * dayInMs + 1,
+    ];
+    for (const candidate of candidates) {
+      if (candidate > now && (nextBoundary === null || candidate < nextBoundary)) {
+        nextBoundary = candidate;
+      }
+    }
+  }
+  return nextBoundary;
 }
 
 export function countAdvancedFilters(filters: AdvancedFilterState): number {
