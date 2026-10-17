@@ -1,7 +1,5 @@
 # GitAtlas Architecture
 
-Moved from docs/plan.md.
-
 This file is a stub. It does not describe the current system.
 
 Related notes:
