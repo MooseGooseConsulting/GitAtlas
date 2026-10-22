@@ -2,5 +2,5 @@
 # Fleet release-age soak (MooseGooseConsulting/renovate-config ADR 0001): resolve only
 # releases at least 4 days old (345600 seconds), in Renovate lock updates and in a local
 # `bun install`. Needs Bun 1.3 or later; older Bun ignores this setting. For a security
-# fix younger than 4 days, list the package in `minimumReleaseAgeExcludes`.
+# fix younger than 4 days, list `<name>@<version>` in `minimumReleaseAgeExcludes`.
 minimumReleaseAge = 345600
